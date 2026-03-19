@@ -1,8 +1,17 @@
 import streamlit as st
-from core.state_keys import SHEETS, RAW_BYTES, STAGE, FILE_NAME, STAGE_UPLOADED
+from core.state_keys import (
+    SHEETS, RAW_BYTES, STAGE, FILE_NAME,
+    STAGE_UPLOADED, STAGE_COLUMNS, STAGE_MASKED,
+    SELECTED_COLUMNS, MASK_CONFIG, MAPPING, MASKED_SHEETS, STATS,
+)
 from core.parser import parse_upload
+from core.detector import detect_sensitive_columns, classify_column_type
+from core.masker import mask_sheets
 from ui.upload_widget import render_preview
 from ui.step_indicator import render_steps
+from ui.column_selector import render_column_selector
+
+import pandas as pd
 
 
 def render() -> None:
@@ -14,6 +23,10 @@ def render() -> None:
         _render_step_upload()
     elif stage == STAGE_UPLOADED:
         _render_step_preview()
+    elif stage == STAGE_COLUMNS:
+        _render_step_columns()
+    elif stage == STAGE_MASKED:
+        _render_step_masked()
 
 
 def _render_step_upload() -> None:
@@ -52,5 +65,115 @@ def _render_step_preview() -> None:
                 st.session_state.pop(key, None)
             st.rerun()
     with col_next:
-        if st.button("Далее", type="primary", use_container_width=True, disabled=True):
-            pass  # Phase 2 will enable this
+        if st.button("Далее", type="primary", use_container_width=True):
+            st.session_state[STAGE] = STAGE_COLUMNS
+            st.rerun()
+
+
+def _render_step_columns() -> None:
+    render_steps(current=2)
+    sheets = st.session_state[SHEETS]
+
+    # Recompute detection — fast and stateless
+    detected = detect_sensitive_columns(sheets)
+
+    # Show warning if nothing was auto-detected
+    all_detected = [col for cols in detected.values() for col in cols]
+    if not all_detected:
+        st.warning(
+            "Автоматически чувствительные колонки не обнаружены, выберите вручную"
+        )
+
+    render_column_selector(sheets, detected)
+
+    col_back, col_mask = st.columns([1, 1])
+    with col_back:
+        if st.button("Назад", use_container_width=True):
+            st.session_state[STAGE] = STAGE_UPLOADED
+            st.rerun()
+    with col_mask:
+        if st.button("Замаскировать", type="primary", use_container_width=True):
+            # Build mask_config from checkbox and selectbox states
+            mask_config: dict[str, dict[str, str]] = {}
+            any_selected = False
+
+            for sheet_name, df in sheets.items():
+                sheet_config: dict[str, str] = {}
+                for col in df.columns:
+                    checked = st.session_state.get(f"cb_{sheet_name}_{col}", False)
+                    if checked:
+                        any_selected = True
+                        # Determine masking type
+                        col_type = classify_column_type(col, df[col])
+                        if (
+                            pd.api.types.is_numeric_dtype(df[col])
+                            and col_type == "numeric"
+                        ):
+                            # User may have toggled to "идентификатор"
+                            user_choice = st.session_state.get(
+                                f"type_{sheet_name}_{col}", "коэффициент"
+                            )
+                            if user_choice == "идентификатор":
+                                sheet_config[col] = "text"
+                            else:
+                                sheet_config[col] = "numeric"
+                        else:
+                            # Text-dtype columns always get text masking
+                            sheet_config[col] = "text"
+                mask_config[sheet_name] = sheet_config
+
+            if not any_selected:
+                st.warning("Выберите хотя бы одну колонку для маскирования")
+            else:
+                masked_sheets, mapping, stats = mask_sheets(sheets, mask_config)
+                st.session_state[MASKED_SHEETS] = masked_sheets
+                st.session_state[MAPPING] = mapping
+                st.session_state[STATS] = stats
+                st.session_state[MASK_CONFIG] = mask_config
+                st.session_state[STAGE] = STAGE_MASKED
+                st.rerun()
+
+
+def _render_step_masked() -> None:
+    render_steps(current=3)
+    masked_sheets = st.session_state[MASKED_SHEETS]
+    stats = st.session_state[STATS]
+    file_name = st.session_state.get(FILE_NAME, "файл")
+
+    st.subheader(f"Результат маскирования: {file_name}")
+
+    # Statistics
+    stat_col1, stat_col2 = st.columns(2)
+    with stat_col1:
+        st.metric("Замаскировано значений", stats["masked_values"])
+    with stat_col2:
+        st.metric("Уникальных сущностей", stats["unique_entities"])
+
+    # Masked data preview (reuse existing render_preview widget)
+    render_preview(masked_sheets)
+
+    # Download stubs (Phase 3 will implement)
+    st.button("Скачать замаскированный файл", disabled=True, use_container_width=True)
+    st.button("Скачать маппинг (JSON)", disabled=True, use_container_width=True)
+    st.button("Скачать маппинг (Excel)", disabled=True, use_container_width=True)
+    st.caption("Будет доступно в следующей версии")
+
+    # Navigation
+    col_back, col_reset = st.columns([1, 1])
+    with col_back:
+        if st.button("Назад к выбору колонок", use_container_width=True):
+            # Clear masking results but preserve checkbox states
+            for key in [MASKED_SHEETS, MAPPING, STATS]:
+                st.session_state.pop(key, None)
+            st.session_state[STAGE] = STAGE_COLUMNS
+            st.rerun()
+    with col_reset:
+        if st.button("Сбросить", use_container_width=True):
+            # Clear all state including dynamic checkbox/type keys
+            keys_to_clear = [k for k in st.session_state if k.startswith(("cb_", "type_"))]
+            for key in [
+                SHEETS, RAW_BYTES, STAGE, FILE_NAME,
+                SELECTED_COLUMNS, MASK_CONFIG, MAPPING, MASKED_SHEETS, STATS,
+            ] + keys_to_clear:
+                st.session_state.pop(key, None)
+            st.rerun()
