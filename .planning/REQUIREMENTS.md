@@ -41,7 +41,7 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Интерфейс
 
-- [ ] **UI-01**: Интерфейс полностью на русском языке
+- [x] **UI-01**: Интерфейс полностью на русском языке
 - [x] **UI-02**: Stateless — сервер ничего не хранит, данные только в сессии Streamlit
 
 ## v2 Requirements
@@ -100,7 +100,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DECR-01 | Phase 3 | Pending |
 | DECR-02 | Phase 3 | Pending |
 | DECR-03 | Phase 3 | Pending |
-| UI-01 | Phase 1 | Pending |
+| UI-01 | Phase 1 | Complete |
 | UI-02 | Phase 1 | Complete |
 
 **Coverage:**
