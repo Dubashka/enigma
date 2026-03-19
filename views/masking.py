@@ -1,4 +1,5 @@
 import streamlit as st
+from core.output import generate_masked_xlsx, generate_mapping_json, generate_mapping_xlsx
 from core.state_keys import (
     SHEETS, RAW_BYTES, STAGE, FILE_NAME,
     STAGE_UPLOADED, STAGE_COLUMNS, STAGE_MASKED,
@@ -152,11 +153,31 @@ def _render_step_masked() -> None:
     # Masked data preview (reuse existing render_preview widget)
     render_preview(masked_sheets)
 
-    # Download stubs (Phase 3 will implement)
-    st.button("Скачать замаскированный файл", disabled=True, use_container_width=True)
-    st.button("Скачать маппинг (JSON)", disabled=True, use_container_width=True)
-    st.button("Скачать маппинг (Excel)", disabled=True, use_container_width=True)
-    st.caption("Будет доступно в следующей версии")
+    # --- Download buttons ---
+    mapping = st.session_state[MAPPING]
+    base_name = file_name.rsplit(".", 1)[0] if "." in file_name else file_name
+
+    st.download_button(
+        label="Скачать замаскированный файл",
+        data=generate_masked_xlsx(masked_sheets),
+        file_name=f"{base_name}_masked.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+    )
+    st.download_button(
+        label="Скачать маппинг (JSON)",
+        data=generate_mapping_json(mapping),
+        file_name=f"{base_name}_mapping.json",
+        mime="application/json",
+        use_container_width=True,
+    )
+    st.download_button(
+        label="Скачать маппинг (Excel)",
+        data=generate_mapping_xlsx(mapping),
+        file_name=f"{base_name}_mapping.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+    )
 
     # Navigation
     col_back, col_reset = st.columns([1, 1])

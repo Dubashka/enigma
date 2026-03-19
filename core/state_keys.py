@@ -15,3 +15,8 @@ MASK_CONFIG = "mask_config"            # dict[sheet_name, dict[col_name, "text"|
 MAPPING = "mapping"                    # dict: {"text": {norm_val: pseudonym}, "numeric": {col: multiplier}}
 MASKED_SHEETS = "masked_sheets"        # dict[str, pd.DataFrame]
 STATS = "stats"                        # dict: {"masked_values": int, "unique_entities": int}
+
+# Phase 3 keys — decryption page
+DECR_SHEETS = "decr_sheets"      # dict[str, pd.DataFrame] — uploaded masked file
+DECR_MAPPING = "decr_mapping"    # dict — loaded JSON mapping
+DECR_RESULT = "decr_result"      # dict[str, pd.DataFrame] — decrypted sheets
