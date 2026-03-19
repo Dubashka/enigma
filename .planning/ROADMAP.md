@@ -31,8 +31,8 @@ Decimal phases appear between their surrounding integers in numeric order.
   5. Структура файла (все листы, колонки, порядок строк) сохранена в session state и доступна следующим шагам
 **Plans**: 2 plans
 Plans:
-- [ ] 01-01-PLAN.md — Project scaffolding, core parser with TDD, session state keys
-- [ ] 01-02-PLAN.md — Streamlit UI: app entry point, sidebar, upload, preview, theme
+- [x] 01-01-PLAN.md — Project scaffolding, core parser with TDD, session state keys
+- [x] 01-02-PLAN.md — Streamlit UI: app entry point, sidebar, upload, preview, theme
 
 ### Phase 2: Detection + Masking
 **Goal**: Пользователь может автоматически получить предложение чувствительных колонок, скорректировать его чекбоксами и запустить маскирование — результатом является полностью замаскированный файл с консистентным кросс-листовым маппингом
