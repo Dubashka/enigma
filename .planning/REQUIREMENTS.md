@@ -83,31 +83,31 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| LOAD-01 | — | Pending |
-| LOAD-02 | — | Pending |
-| LOAD-03 | — | Pending |
-| DETC-01 | — | Pending |
-| DETC-02 | — | Pending |
-| DETC-03 | — | Pending |
-| MASK-01 | — | Pending |
-| MASK-02 | — | Pending |
-| MASK-03 | — | Pending |
-| MASK-04 | — | Pending |
-| OUT-01 | — | Pending |
-| OUT-02 | — | Pending |
-| OUT-03 | — | Pending |
-| OUT-04 | — | Pending |
-| DECR-01 | — | Pending |
-| DECR-02 | — | Pending |
-| DECR-03 | — | Pending |
-| UI-01 | — | Pending |
-| UI-02 | — | Pending |
+| LOAD-01 | Phase 1 | Pending |
+| LOAD-02 | Phase 1 | Pending |
+| LOAD-03 | Phase 1 | Pending |
+| DETC-01 | Phase 2 | Pending |
+| DETC-02 | Phase 2 | Pending |
+| DETC-03 | Phase 2 | Pending |
+| MASK-01 | Phase 2 | Pending |
+| MASK-02 | Phase 2 | Pending |
+| MASK-03 | Phase 2 | Pending |
+| MASK-04 | Phase 2 | Pending |
+| OUT-01 | Phase 3 | Pending |
+| OUT-02 | Phase 3 | Pending |
+| OUT-03 | Phase 3 | Pending |
+| OUT-04 | Phase 3 | Pending |
+| DECR-01 | Phase 3 | Pending |
+| DECR-02 | Phase 3 | Pending |
+| DECR-03 | Phase 3 | Pending |
+| UI-01 | Phase 1 | Pending |
+| UI-02 | Phase 1 | Pending |
 
 **Coverage:**
 - v1 requirements: 19 total
-- Mapped to phases: 0
-- Unmapped: 19 ⚠️
+- Mapped to phases: 19
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-03-19*
-*Last updated: 2026-03-19 after initial definition*
+*Last updated: 2026-03-19 after roadmap creation*
