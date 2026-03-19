@@ -13,7 +13,7 @@
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Foundation** - Загрузка файлов, превью, русскоязычный UI, stateless session state архитектура (completed 2026-03-19)
-- [ ] **Phase 2: Detection + Masking** - Движок детекции чувствительных колонок и полный движок маскирования
+- [x] **Phase 2: Detection + Masking** - Движок детекции чувствительных колонок и полный движок маскирования (completed 2026-03-20)
 - [ ] **Phase 3: Output + Decryption** - Выгрузка замаскированных файлов, маппингов, статистики и дешифровка
 - [ ] **Phase 4: Deployment** - Деплой на VM (systemd + nginx), hardening производительности
 
@@ -46,8 +46,8 @@ Plans:
   5. Числовые значения в количественных колонках умножаются на коэффициент, числа-идентификаторы (номера договоров) маскируются как текст
 **Plans**: 2 plans
 Plans:
-- [ ] 02-01-PLAN.md — TDD: detection engine (keyword matching) + masking engine (text pseudonyms, numeric coefficients, cross-sheet consistency)
-- [ ] 02-02-PLAN.md — UI: column selector with checkboxes/badges, masking view extension (Шаг 2 + Шаг 3), visual verification
+- [x] 02-01-PLAN.md — TDD: detection engine (keyword matching) + masking engine (text pseudonyms, numeric coefficients, cross-sheet consistency)
+- [x] 02-02-PLAN.md — UI: column selector with checkboxes/badges, masking view extension (Шаг 2 + Шаг 3), visual verification
 
 ### Phase 3: Output + Decryption
 **Goal**: Пользователь может скачать замаскированный файл и файлы маппинга, увидеть статистику маскирования, а затем восстановить оригинальные данные из замаскированного файла
@@ -80,6 +80,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundation | 2/2 | Complete   | 2026-03-19 |
-| 2. Detection + Masking | 1/2 | In Progress|  |
+| 2. Detection + Masking | 2/2 | Complete   | 2026-03-20 |
 | 3. Output + Decryption | 0/? | Not started | - |
 | 4. Deployment | 0/? | Not started | - |
