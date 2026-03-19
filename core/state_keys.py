@@ -8,3 +8,10 @@ FILE_NAME = "file_name"     # str — original uploaded file name
 STAGE_UPLOADED = "uploaded"
 STAGE_COLUMNS = "columns_selected"
 STAGE_MASKED = "masked"
+
+# Phase 2 keys
+SELECTED_COLUMNS = "selected_columns"  # dict[sheet_name, dict[col_name, bool]]
+MASK_CONFIG = "mask_config"            # dict[sheet_name, dict[col_name, "text"|"numeric"]]
+MAPPING = "mapping"                    # dict: {"text": {norm_val: pseudonym}, "numeric": {col: multiplier}}
+MASKED_SHEETS = "masked_sheets"        # dict[str, pd.DataFrame]
+STATS = "stats"                        # dict: {"masked_values": int, "unique_entities": int}
