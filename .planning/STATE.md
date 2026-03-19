@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 02-detection-masking 02-01-PLAN.md
-last_updated: "2026-03-19T20:37:47.621Z"
+stopped_at: "Checkpoint: 02-02 Task 2 human-verify awaiting user"
+last_updated: "2026-03-19T20:41:59.252Z"
 last_activity: 2026-03-19 — Roadmap created, ready for Phase 1 planning
 progress:
   total_phases: 4
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 4
-  completed_plans: 3
+  completed_plans: 4
   percent: 0
 ---
 
@@ -53,6 +53,7 @@ Progress: [░░░░░░░░░░] 0%
 | Phase 01-foundation P01 | 6 | 1 tasks | 8 files |
 | Phase 01-foundation P02 | 1 | 1 tasks | 8 files |
 | Phase 02-detection-masking P01 | 25 | 2 tasks | 6 files |
+| Phase 02-detection-masking P02 | 2 | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -72,6 +73,7 @@ Recent decisions affecting current work:
 - [Phase 02-detection-masking]: Single global mapping dict built before sheet loop — prerequisite for cross-sheet consistency
 - [Phase 02-detection-masking]: NUMERIC_ID_KEYWORDS classification overrides dtype: int64 columns with document/contract keywords get text masking
 - [Phase 02-detection-masking]: Prefix derivation: skip service words, take first remaining word, normalize genitive suffix -ия -> -ие
+- [Phase 02-detection-masking]: Numeric type toggle only shown when dtype is numeric AND classify_column_type returns numeric — identifier-type numerics always text-masked without toggle
 
 ### Pending Todos
 
@@ -84,6 +86,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-19T20:37:47.619Z
-Stopped at: Completed 02-detection-masking 02-01-PLAN.md
+Last session: 2026-03-19T20:41:52.214Z
+Stopped at: Checkpoint: 02-02 Task 2 human-verify awaiting user
 Resume file: None
