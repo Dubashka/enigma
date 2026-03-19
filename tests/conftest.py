@@ -52,3 +52,21 @@ def sample_csv_comma():
 def corrupt_bytes():
     """Random invalid bytes that cannot be parsed as xlsx or csv."""
     return b"not a valid file at all" * 5
+
+
+@pytest.fixture
+def sample_detection_sheets():
+    """Multi-sheet dict[str, DataFrame] for detection/masking tests."""
+    import pandas as pd
+    df1 = pd.DataFrame({
+        "Имя предприятия": ["ООО Альфа", "ООО Бета", "ООО Альфа"],
+        "Количество": [10, 20, 30],
+        "Цена": [100.0, 200.0, 300.0],
+        "Документ закупки": [4500001, 4500002, 4500003],
+    })
+    df2 = pd.DataFrame({
+        "Имя предприятия": ["ООО Альфа", "ООО Гамма"],
+        "Автор изменения": ["Иванов", "Петров"],
+        "Сумма": [1000, 2000],
+    })
+    return {"Лист1": df1, "Лист2": df2}
