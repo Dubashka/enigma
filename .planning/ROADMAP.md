@@ -44,7 +44,10 @@ Plans:
   3. Текстовая колонка "Имя предприятия" маскируется в "Предприятие A", "Предприятие B" — псевдоним содержит слово из названия колонки
   4. Одно и то же значение (например, название контрагента) получает один и тот же псевдоним на всех листах файла
   5. Числовые значения в количественных колонках умножаются на коэффициент, числа-идентификаторы (номера договоров) маскируются как текст
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 02-01-PLAN.md — TDD: detection engine (keyword matching) + masking engine (text pseudonyms, numeric coefficients, cross-sheet consistency)
+- [ ] 02-02-PLAN.md — UI: column selector with checkboxes/badges, masking view extension (Шаг 2 + Шаг 3), visual verification
 
 ### Phase 3: Output + Decryption
 **Goal**: Пользователь может скачать замаскированный файл и файлы маппинга, увидеть статистику маскирования, а затем восстановить оригинальные данные из замаскированного файла
@@ -77,6 +80,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundation | 2/2 | Complete   | 2026-03-19 |
-| 2. Detection + Masking | 0/? | Not started | - |
+| 2. Detection + Masking | 0/2 | In Progress | - |
 | 3. Output + Decryption | 0/? | Not started | - |
 | 4. Deployment | 0/? | Not started | - |
