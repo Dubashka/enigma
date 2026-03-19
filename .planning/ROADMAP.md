@@ -61,7 +61,7 @@ Plans:
   5. Колонки и строки, добавленные LLM в замаскированный файл, остаются в восстановленном файле без изменений
 **Plans**: 2 plans
 Plans:
-- [ ] 03-01-PLAN.md — TDD: output generators (masked xlsx, JSON mapping, Excel mapping) + decryption engine (reverse text/numeric mapping)
+- [x] 03-01-PLAN.md — TDD: output generators (masked xlsx, JSON mapping, Excel mapping) + decryption engine (reverse text/numeric mapping)
 - [ ] 03-02-PLAN.md — UI: download buttons on masking page, full decryption page (upload, preview, decrypt, download), visual verification
 
 ### Phase 4: Deployment
@@ -84,5 +84,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 |-------|----------------|--------|-----------|
 | 1. Foundation | 2/2 | Complete   | 2026-03-19 |
 | 2. Detection + Masking | 2/2 | Complete   | 2026-03-20 |
-| 3. Output + Decryption | 0/2 | Planning complete | - |
+| 3. Output + Decryption | 1/2 | In progress | - |
 | 4. Deployment | 0/? | Not started | - |

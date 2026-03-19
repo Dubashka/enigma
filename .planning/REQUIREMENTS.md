@@ -28,16 +28,16 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Выгрузка
 
-- [ ] **OUT-01**: Пользователь скачивает замаскированный Excel-файл со всеми листами
-- [ ] **OUT-02**: Пользователь скачивает маппинг в формате JSON
-- [ ] **OUT-03**: Пользователь скачивает маппинг в формате Excel
+- [x] **OUT-01**: Пользователь скачивает замаскированный Excel-файл со всеми листами
+- [x] **OUT-02**: Пользователь скачивает маппинг в формате JSON
+- [x] **OUT-03**: Пользователь скачивает маппинг в формате Excel
 - [ ] **OUT-04**: Система показывает статистику: количество замаскированных значений и уникальных сущностей
 
 ### Дешифровка
 
-- [ ] **DECR-01**: Пользователь загружает замаскированный файл + JSON-маппинг
-- [ ] **DECR-02**: Система заменяет псевдонимы обратно на оригинальные значения
-- [ ] **DECR-03**: Новые колонки/строки (добавленные LLM) остаются без изменений
+- [x] **DECR-01**: Пользователь загружает замаскированный файл + JSON-маппинг
+- [x] **DECR-02**: Система заменяет псевдонимы обратно на оригинальные значения
+- [x] **DECR-03**: Новые колонки/строки (добавленные LLM) остаются без изменений
 
 ### Интерфейс
 
@@ -93,13 +93,13 @@ Which phases cover which requirements. Updated during roadmap creation.
 | MASK-02 | Phase 2 | Complete |
 | MASK-03 | Phase 2 | Complete |
 | MASK-04 | Phase 2 | Complete |
-| OUT-01 | Phase 3 | Pending |
-| OUT-02 | Phase 3 | Pending |
-| OUT-03 | Phase 3 | Pending |
+| OUT-01 | Phase 3 | Complete |
+| OUT-02 | Phase 3 | Complete |
+| OUT-03 | Phase 3 | Complete |
 | OUT-04 | Phase 3 | Pending |
-| DECR-01 | Phase 3 | Pending |
-| DECR-02 | Phase 3 | Pending |
-| DECR-03 | Phase 3 | Pending |
+| DECR-01 | Phase 3 | Complete |
+| DECR-02 | Phase 3 | Complete |
+| DECR-03 | Phase 3 | Complete |
 | UI-01 | Phase 1 | Complete |
 | UI-02 | Phase 1 | Complete |
 

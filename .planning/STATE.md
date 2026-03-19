@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: planning
-stopped_at: Phase 3 context gathered
-last_updated: "2026-03-19T21:06:27.623Z"
-last_activity: 2026-03-20 — Phase 2 completed, visual verification approved
+status: in_progress
+stopped_at: "Completed 03-01-PLAN.md"
+last_updated: "2026-03-20T07:45:00Z"
+last_activity: 2026-03-20 — Phase 3 Plan 1 complete (output generators + decryption engine)
 progress:
   total_phases: 4
   completed_phases: 2
-  total_plans: 4
-  completed_plans: 4
-  percent: 50
+  total_plans: 5
+  completed_plans: 5
+  percent: 62
 ---
 
 # Project State
@@ -26,11 +26,11 @@ See: .planning/PROJECT.md (updated 2026-03-19)
 ## Current Position
 
 Phase: 3 of 4 (Output + Decryption)
-Plan: 0 of ? in current phase
-Status: Ready to plan
-Last activity: 2026-03-20 — Phase 2 completed, visual verification approved
+Plan: 1 of 2 in current phase
+Status: In progress
+Last activity: 2026-03-20 — Phase 3 Plan 1 complete (output generators + decryption engine)
 
-Progress: [█████░░░░░] 50%
+Progress: [██████░░░░] 62%
 
 ## Performance Metrics
 
@@ -54,6 +54,7 @@ Progress: [█████░░░░░] 50%
 | Phase 01-foundation P02 | 1 | 1 tasks | 8 files |
 | Phase 02-detection-masking P01 | 25 | 2 tasks | 6 files |
 | Phase 02-detection-masking P02 | 2 | 1 tasks | 2 files |
+| Phase 03-output-decryption P01 | 5 | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -74,6 +75,9 @@ Recent decisions affecting current work:
 - [Phase 02-detection-masking]: NUMERIC_ID_KEYWORDS classification overrides dtype: int64 columns with document/contract keywords get text masking
 - [Phase 02-detection-masking]: Prefix derivation: skip service words, take first remaining word, normalize genitive suffix -ия -> -ие
 - [Phase 02-detection-masking]: Numeric type toggle only shown when dtype is numeric AND classify_column_type returns numeric — identifier-type numerics always text-masked without toggle
+- [Phase 03-output-decryption]: load_mapping_json returns None both on JSON parse errors and when "text"/"numeric" keys are missing — callers must check for None before calling decrypt_sheets
+- [Phase 03-output-decryption]: decrypt_sheets applies reverse_text map to all non-numeric columns with passthrough fallback — LLM-added columns stay unchanged automatically
+- [Phase 03-output-decryption]: Integer-dtype numeric columns cast back to Int64 nullable after decryption to match masker.py convention
 
 ### Pending Todos
 
@@ -86,6 +90,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-19T21:06:27.616Z
-Stopped at: Phase 3 context gathered
-Resume file: .planning/phases/03-output-decryption/03-CONTEXT.md
+Last session: 2026-03-20T07:45:00Z
+Stopped at: Completed 03-01-PLAN.md
+Resume file: .planning/phases/03-output-decryption/03-02-PLAN.md
