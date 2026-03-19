@@ -14,8 +14,8 @@ page = st.sidebar.radio(
 )
 
 if page == "Маскирование":
-    from pages.masking import render
+    from views.masking import render
     render()
 elif page == "Дешифровка":
-    from pages.decryption import render
+    from views.decryption import render
     render()
