@@ -59,7 +59,10 @@ Plans:
   3. После маскирования видна статистика: количество замаскированных значений и уникальных сущностей
   4. Пользователь загружает замаскированный файл + JSON-маппинг и скачивает файл с восстановленными оригинальными значениями
   5. Колонки и строки, добавленные LLM в замаскированный файл, остаются в восстановленном файле без изменений
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 03-01-PLAN.md — TDD: output generators (masked xlsx, JSON mapping, Excel mapping) + decryption engine (reverse text/numeric mapping)
+- [ ] 03-02-PLAN.md — UI: download buttons on masking page, full decryption page (upload, preview, decrypt, download), visual verification
 
 ### Phase 4: Deployment
 **Goal**: Приложение запущено на VM и доступно по внутреннему URL, обрабатывает реальный файл "Данные для маскирования_13.03.xlsx" без зависания, данные не утекают между сессиями
@@ -81,5 +84,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 |-------|----------------|--------|-----------|
 | 1. Foundation | 2/2 | Complete   | 2026-03-19 |
 | 2. Detection + Masking | 2/2 | Complete   | 2026-03-20 |
-| 3. Output + Decryption | 0/? | Not started | - |
+| 3. Output + Decryption | 0/2 | Planning complete | - |
 | 4. Deployment | 0/? | Not started | - |
