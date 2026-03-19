@@ -9,9 +9,9 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Загрузка файлов
 
-- [ ] **LOAD-01**: Пользователь может загрузить Excel-файл (xlsx) с несколькими листами
-- [ ] **LOAD-02**: Пользователь может загрузить CSV-файл
-- [ ] **LOAD-03**: Система сохраняет структуру файла (все листы, колонки, порядок строк)
+- [x] **LOAD-01**: Пользователь может загрузить Excel-файл (xlsx) с несколькими листами
+- [x] **LOAD-02**: Пользователь может загрузить CSV-файл
+- [x] **LOAD-03**: Система сохраняет структуру файла (все листы, колонки, порядок строк)
 
 ### Детекция чувствительных данных
 
@@ -42,7 +42,7 @@ Requirements for initial release. Each maps to roadmap phases.
 ### Интерфейс
 
 - [ ] **UI-01**: Интерфейс полностью на русском языке
-- [ ] **UI-02**: Stateless — сервер ничего не хранит, данные только в сессии Streamlit
+- [x] **UI-02**: Stateless — сервер ничего не хранит, данные только в сессии Streamlit
 
 ## v2 Requirements
 
@@ -83,9 +83,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| LOAD-01 | Phase 1 | Pending |
-| LOAD-02 | Phase 1 | Pending |
-| LOAD-03 | Phase 1 | Pending |
+| LOAD-01 | Phase 1 | Complete |
+| LOAD-02 | Phase 1 | Complete |
+| LOAD-03 | Phase 1 | Complete |
 | DETC-01 | Phase 2 | Pending |
 | DETC-02 | Phase 2 | Pending |
 | DETC-03 | Phase 2 | Pending |
@@ -101,7 +101,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DECR-02 | Phase 3 | Pending |
 | DECR-03 | Phase 3 | Pending |
 | UI-01 | Phase 1 | Pending |
-| UI-02 | Phase 1 | Pending |
+| UI-02 | Phase 1 | Complete |
 
 **Coverage:**
 - v1 requirements: 19 total
