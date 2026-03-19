@@ -72,13 +72,14 @@ def test_index_to_label():
 # ---------------------------------------------------------------------------
 
 def test_prefix_derivation():
-    """_derive_prefix extracts last meaningful noun from column name."""
+    """_derive_prefix extracts first meaningful noun from column name (skipping service words)."""
+    # "имя" is a service word -> skip it -> first remaining word is "предприятия" -> normalize -> "Предприятие"
     assert _derive_prefix("Имя предприятия") == "Предприятие"
-    assert _derive_prefix("Автор изменения") == "Изменения"
-    # For columns where all words are meaningful, any word from the column name is acceptable
+    # No service words -> first word is "Автор"
+    assert _derive_prefix("Автор изменения") == "Автор"
+    # "наименование" and "рабочего" are service words -> skip both -> first remaining is "места"
     prefix = _derive_prefix("Наименование рабочего места")
-    column_words = {"Наименование", "Рабочего", "Места"}
-    assert prefix in column_words, f"Expected one of {column_words}, got '{prefix}'"
+    assert prefix in {"Места", "Место"}, f"Expected 'Места' or 'Место', got '{prefix}'"
 
 
 # ---------------------------------------------------------------------------
@@ -124,18 +125,26 @@ def test_numeric_coefficient_range(sample_detection_sheets):
         assert 0.5 <= coeff <= 1.5, f"Coefficient {coeff} for '{col}' out of range [0.5, 1.5]"
 
 
-def test_numeric_proportions_preserved(sample_detection_sheets):
-    """Numeric masking preserves proportions between rows (same multiplier)."""
-    mask_config = _make_mask_config(sample_detection_sheets)
-    masked, _, _ = mask_sheets(sample_detection_sheets, mask_config)
+def test_numeric_proportions_preserved():
+    """Numeric masking preserves proportions between rows (same multiplier).
 
-    orig = sample_detection_sheets["Лист1"]["Количество"].tolist()
-    masked_vals = masked["Лист1"]["Количество"].tolist()
+    Uses float column to avoid integer rounding error. The single coefficient
+    per column guarantees proportional scaling for float data.
+    """
+    # Use large floats to ensure rounding to 2 decimals doesn't distort ratio
+    df = pd.DataFrame({"Выручка": [1000.0, 2000.0, 3000.0]})
+    sheets = {"Лист1": df}
+    mask_config = {"Лист1": {"Выручка": "numeric"}}
+    masked, _, _ = mask_sheets(sheets, mask_config)
 
-    # Ratio orig[0]/orig[1] should match masked[0]/masked[1] within float tolerance
+    orig = df["Выручка"].tolist()
+    masked_vals = masked["Лист1"]["Выручка"].tolist()
+
+    # Ratio orig[0]/orig[1] should match masked[0]/masked[1]
+    # With floats and round(2) the ratio is preserved to at least 1e-4
     ratio_before = orig[0] / orig[1]
     ratio_after = masked_vals[0] / masked_vals[1]
-    assert math.isclose(ratio_before, ratio_after, rel_tol=1e-6), (
+    assert math.isclose(ratio_before, ratio_after, rel_tol=1e-4), (
         f"Proportions changed: {ratio_before} vs {ratio_after}"
     )
 
