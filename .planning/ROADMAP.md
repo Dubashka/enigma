@@ -12,7 +12,7 @@
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Foundation** - Загрузка файлов, превью, русскоязычный UI, stateless session state архитектура
+- [x] **Phase 1: Foundation** - Загрузка файлов, превью, русскоязычный UI, stateless session state архитектура (completed 2026-03-19)
 - [ ] **Phase 2: Detection + Masking** - Движок детекции чувствительных колонок и полный движок маскирования
 - [ ] **Phase 3: Output + Decryption** - Выгрузка замаскированных файлов, маппингов, статистики и дешифровка
 - [ ] **Phase 4: Deployment** - Деплой на VM (systemd + nginx), hardening производительности
@@ -76,7 +76,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation | 1/2 | In Progress|  |
+| 1. Foundation | 2/2 | Complete   | 2026-03-19 |
 | 2. Detection + Masking | 0/? | Not started | - |
 | 3. Output + Decryption | 0/? | Not started | - |
 | 4. Deployment | 0/? | Not started | - |
