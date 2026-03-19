@@ -14,7 +14,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Foundation** - Загрузка файлов, превью, русскоязычный UI, stateless session state архитектура (completed 2026-03-19)
 - [x] **Phase 2: Detection + Masking** - Движок детекции чувствительных колонок и полный движок маскирования (completed 2026-03-20)
-- [ ] **Phase 3: Output + Decryption** - Выгрузка замаскированных файлов, маппингов, статистики и дешифровка
+- [x] **Phase 3: Output + Decryption** - Выгрузка замаскированных файлов, маппингов, статистики и дешифровка (completed 2026-03-19)
 - [ ] **Phase 4: Deployment** - Деплой на VM (systemd + nginx), hardening производительности
 
 ## Phase Details
@@ -84,5 +84,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 |-------|----------------|--------|-----------|
 | 1. Foundation | 2/2 | Complete   | 2026-03-19 |
 | 2. Detection + Masking | 2/2 | Complete   | 2026-03-20 |
-| 3. Output + Decryption | 1/2 | In progress | - |
+| 3. Output + Decryption | 2/2 | Complete   | 2026-03-19 |
 | 4. Deployment | 0/? | Not started | - |

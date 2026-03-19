@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: in_progress
-stopped_at: "Completed 03-01-PLAN.md"
-last_updated: "2026-03-20T07:45:00Z"
+status: executing
+stopped_at: Completed 03-02-PLAN.md
+last_updated: "2026-03-19T21:30:13.366Z"
 last_activity: 2026-03-20 — Phase 3 Plan 1 complete (output generators + decryption engine)
 progress:
   total_phases: 4
-  completed_phases: 2
-  total_plans: 5
-  completed_plans: 5
+  completed_phases: 3
+  total_plans: 6
+  completed_plans: 6
   percent: 62
 ---
 
@@ -55,6 +55,7 @@ Progress: [██████░░░░] 62%
 | Phase 02-detection-masking P01 | 25 | 2 tasks | 6 files |
 | Phase 02-detection-masking P02 | 2 | 1 tasks | 2 files |
 | Phase 03-output-decryption P01 | 5 | 2 tasks | 4 files |
+| Phase 03-output-decryption P02 | 4 | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -78,6 +79,8 @@ Recent decisions affecting current work:
 - [Phase 03-output-decryption]: load_mapping_json returns None both on JSON parse errors and when "text"/"numeric" keys are missing — callers must check for None before calling decrypt_sheets
 - [Phase 03-output-decryption]: decrypt_sheets applies reverse_text map to all non-numeric columns with passthrough fallback — LLM-added columns stay unchanged automatically
 - [Phase 03-output-decryption]: Integer-dtype numeric columns cast back to Int64 nullable after decryption to match masker.py convention
+- [Phase 03-output-decryption]: generate_masked_xlsx reused for decrypted output download — accepts any dict[str, DataFrame], no new function needed
+- [Phase 03-output-decryption]: Decryption download filename derived from uploaded_file.name at render time — no session state needed for filename
 
 ### Pending Todos
 
@@ -90,6 +93,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-20T07:45:00Z
-Stopped at: Completed 03-01-PLAN.md
-Resume file: .planning/phases/03-output-decryption/03-02-PLAN.md
+Last session: 2026-03-19T21:30:13.364Z
+Stopped at: Completed 03-02-PLAN.md
+Resume file: None

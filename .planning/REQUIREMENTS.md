@@ -31,7 +31,7 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **OUT-01**: Пользователь скачивает замаскированный Excel-файл со всеми листами
 - [x] **OUT-02**: Пользователь скачивает маппинг в формате JSON
 - [x] **OUT-03**: Пользователь скачивает маппинг в формате Excel
-- [ ] **OUT-04**: Система показывает статистику: количество замаскированных значений и уникальных сущностей
+- [x] **OUT-04**: Система показывает статистику: количество замаскированных значений и уникальных сущностей
 
 ### Дешифровка
 
@@ -96,7 +96,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | OUT-01 | Phase 3 | Complete |
 | OUT-02 | Phase 3 | Complete |
 | OUT-03 | Phase 3 | Complete |
-| OUT-04 | Phase 3 | Pending |
+| OUT-04 | Phase 3 | Complete |
 | DECR-01 | Phase 3 | Complete |
 | DECR-02 | Phase 3 | Complete |
 | DECR-03 | Phase 3 | Complete |
