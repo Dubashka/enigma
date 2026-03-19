@@ -29,7 +29,10 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. Все надписи, кнопки и сообщения в интерфейсе на русском языке
   4. Перезагрузка страницы сбрасывает сессию — никакие данные не сохраняются на сервере
   5. Структура файла (все листы, колонки, порядок строк) сохранена в session state и доступна следующим шагам
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 01-01-PLAN.md — Project scaffolding, core parser with TDD, session state keys
+- [ ] 01-02-PLAN.md — Streamlit UI: app entry point, sidebar, upload, preview, theme
 
 ### Phase 2: Detection + Masking
 **Goal**: Пользователь может автоматически получить предложение чувствительных колонок, скорректировать его чекбоксами и запустить маскирование — результатом является полностью замаскированный файл с консистентным кросс-листовым маппингом
@@ -73,7 +76,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation | 0/? | Not started | - |
+| 1. Foundation | 0/2 | Planning complete | - |
 | 2. Detection + Masking | 0/? | Not started | - |
 | 3. Output + Decryption | 0/? | Not started | - |
 | 4. Deployment | 0/? | Not started | - |
