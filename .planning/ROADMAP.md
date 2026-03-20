@@ -62,7 +62,7 @@ Plans:
 **Plans**: 2 plans
 Plans:
 - [x] 03-01-PLAN.md — TDD: output generators (masked xlsx, JSON mapping, Excel mapping) + decryption engine (reverse text/numeric mapping)
-- [ ] 03-02-PLAN.md — UI: download buttons on masking page, full decryption page (upload, preview, decrypt, download), visual verification
+- [x] 03-02-PLAN.md — UI: download buttons on masking page, full decryption page (upload, preview, decrypt, download), visual verification
 
 ### Phase 4: Deployment
 **Goal**: Приложение запущено на VM и доступно по внутреннему URL, обрабатывает реальный файл "Данные для маскирования_13.03.xlsx" без зависания, данные не утекают между сессиями
@@ -73,7 +73,10 @@ Plans:
   2. Файл с 4 листами и ~30 000 строк обрабатывается без зависания UI менее чем за 30 секунд
   3. Два параллельных браузерных сеанса не влияют друг на друга — данные одного пользователя не видны другому
   4. Загрузка файла размером >50 MB выдаёт читаемое сообщение об ошибке вместо краша
-**Plans**: TBD
+**Plans**: 2 plans
+Plans:
+- [ ] 04-01-PLAN.md — Create deployment config files (config.toml, systemd unit, nginx config, deploy scripts)
+- [ ] 04-02-PLAN.md — Deploy to VM and verify all 4 production success criteria
 
 ## Progress
 
@@ -85,4 +88,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4
 | 1. Foundation | 2/2 | Complete   | 2026-03-19 |
 | 2. Detection + Masking | 2/2 | Complete   | 2026-03-20 |
 | 3. Output + Decryption | 2/2 | Complete   | 2026-03-19 |
-| 4. Deployment | 0/? | Not started | - |
+| 4. Deployment | 0/2 | Not started | - |
