@@ -1,0 +1,21 @@
+[Unit]
+Description=Enigma — Streamlit Data Masking App
+After=network.target
+
+[Service]
+Type=simple
+User=enigma
+Group=enigma
+WorkingDirectory=/home/enigma/app
+ExecStart=/home/enigma/venv/bin/streamlit run app.py \
+    --server.port 8501 \
+    --server.headless true
+Restart=always
+RestartSec=5
+Environment=STREAMLIT_SERVER_HEADLESS=true
+Environment=PYTHONUNBUFFERED=1
+MemoryMax=2G
+Nice=10
+
+[Install]
+WantedBy=multi-user.target
