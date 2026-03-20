@@ -1,3 +1,4 @@
+import pathlib
 import streamlit as st
 
 st.set_page_config(
@@ -6,7 +7,11 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-st.sidebar.title("Enigma")
+_logo = pathlib.Path(__file__).parent / "assets" / "logo.png"
+if _logo.exists():
+    st.sidebar.image(str(_logo), use_container_width=True)
+else:
+    st.sidebar.title("Enigma")
 page = st.sidebar.radio(
     "Режим",
     ["Маскирование", "Дешифровка"],
