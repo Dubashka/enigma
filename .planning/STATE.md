@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 03-02-PLAN.md
-last_updated: "2026-03-19T21:52:21.541Z"
+stopped_at: Completed 04-01-PLAN.md
+last_updated: "2026-03-20T05:02:08.492Z"
 last_activity: 2026-03-20 — Phase 3 Plan 1 complete (output generators + decryption engine)
 progress:
   total_phases: 4
   completed_phases: 3
-  total_plans: 6
-  completed_plans: 6
+  total_plans: 8
+  completed_plans: 7
   percent: 62
 ---
 
@@ -56,6 +56,7 @@ Progress: [██████░░░░] 62%
 | Phase 02-detection-masking P02 | 2 | 1 tasks | 2 files |
 | Phase 03-output-decryption P01 | 5 | 2 tasks | 4 files |
 | Phase 03-output-decryption P02 | 4 | 3 tasks | 3 files |
+| Phase 04-deployment P01 | 2 | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -81,6 +82,8 @@ Recent decisions affecting current work:
 - [Phase 03-output-decryption]: Integer-dtype numeric columns cast back to Int64 nullable after decryption to match masker.py convention
 - [Phase 03-output-decryption]: generate_masked_xlsx reused for decrypted output download — accepts any dict[str, DataFrame], no new function needed
 - [Phase 03-output-decryption]: Decryption download filename derived from uploaded_file.name at render time — no session state needed for filename
+- [Phase 04-deployment]: deploy.sh excludes .planning and deploy directories from rsync — keeps VM app/ directory clean and focused
+- [Phase 04-deployment]: setup-vm.sh runs entirely via SSH from local machine — zero manual steps on VM for first-time provisioning
 
 ### Pending Todos
 
@@ -93,6 +96,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-19T21:30:13.364Z
-Stopped at: Completed 03-02-PLAN.md
+Last session: 2026-03-20T05:02:08.490Z
+Stopped at: Completed 04-01-PLAN.md
 Resume file: None
