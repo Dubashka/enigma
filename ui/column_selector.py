@@ -7,11 +7,18 @@ import pandas as pd
 from core.detector import classify_column_type
 
 
+def _get_sample_values(series: pd.Series, n: int = 3) -> str:
+    """Return a string of up to n non-null unique sample values from series."""
+    samples = series.dropna().unique()
+    samples = samples[:n]
+    return ",  ".join(str(v) for v in samples)
+
+
 def render_column_selector(
     sheets: dict[str, pd.DataFrame],
     detected: dict[str, list[str]],
 ) -> None:
-    """Render per-sheet column checkboxes with type badges and select-all buttons.
+    """Render per-sheet column checkboxes with type badges, sample values and select-all buttons.
 
     Args:
         sheets:   {sheet_name: DataFrame} — original data
@@ -40,6 +47,17 @@ def render_column_selector(
 
             st.divider()
 
+            # Header row
+            h_cb, h_badge, h_samples, h_toggle = st.columns([0.5, 0.15, 0.25, 0.1])
+            with h_cb:
+                st.caption("Колонка")
+            with h_badge:
+                st.caption("Тип")
+            with h_samples:
+                st.caption("Примеры значений")
+            with h_toggle:
+                st.caption("")
+
             # One row per column
             for col in df.columns:
                 col_type = classify_column_type(col, df[col])
@@ -49,7 +67,7 @@ def render_column_selector(
                     col in detected_cols,
                 )
 
-                cb_col, badge_col, toggle_col = st.columns([0.6, 0.2, 0.2])
+                cb_col, badge_col, samples_col, toggle_col = st.columns([0.5, 0.15, 0.25, 0.1])
 
                 with cb_col:
                     st.checkbox(
@@ -72,10 +90,15 @@ def render_column_selector(
                             unsafe_allow_html=True,
                         )
 
+                with samples_col:
+                    sample_str = _get_sample_values(df[col], n=3)
+                    if sample_str:
+                        st.markdown(
+                            f"<span style='color:#666;font-size:0.8em'>{sample_str}</span>",
+                            unsafe_allow_html=True,
+                        )
+
                 with toggle_col:
-                    # Type toggle only for genuinely numeric-dtype columns
-                    # (text-dtype columns classified as "text" via NUMERIC_ID_KEYWORDS
-                    # do NOT get a toggle — they always mask as text)
                     if is_numeric_dtype and col_type == "numeric":
                         st.selectbox(
                             "Тип",
