@@ -138,13 +138,22 @@ def build_numeric_mapping(
 # ---------------------------------------------------------------------------
 
 def apply_text_masking(series: pd.Series, mapping: dict[str, str]) -> pd.Series:
-    """Vectorized text substitution. NaN cells remain NaN."""
-    def lookup(v):
-        if pd.isna(v):
-            return v
-        return mapping.get(_normalize(str(v)), v)
+    """Vectorized text substitution. NaN cells remain NaN.
 
-    return series.map(lookup)
+    Optimization: builds a raw-value lookup dict from unique non-NaN values
+    so _normalize() is called only once per unique value, not per row.
+    """
+    # Build raw → pseudonym map from unique values (much smaller than full series)
+    raw_lookup: dict = {}
+    for raw_val in series.dropna().unique():
+        key = _normalize(str(raw_val))
+        if key in mapping:
+            raw_lookup[raw_val] = mapping[key]
+
+    if not raw_lookup:
+        return series
+
+    return series.map(lambda v: raw_lookup.get(v, v) if not pd.isna(v) else v)
 
 
 def apply_numeric_masking(series: pd.Series, multiplier: float) -> pd.Series:

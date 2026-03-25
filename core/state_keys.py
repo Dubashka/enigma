@@ -1,6 +1,7 @@
 # Session state keys — single source of truth
-SHEETS = "sheets"           # dict[str, pd.DataFrame] — parsed file data
+SHEETS = "sheets"           # dict[str, pd.DataFrame] — parsed file data (preview only for large files)
 RAW_BYTES = "raw_bytes"     # bytes — original file bytes for re-download
+FILE_PATH = "file_path"     # str — path to uploaded file on disk
 STAGE = "stage"             # str — current step in the flow
 FILE_NAME = "file_name"     # str — original uploaded file name
 
@@ -15,6 +16,9 @@ MASK_CONFIG = "mask_config"            # dict[sheet_name, dict[col_name, "text"|
 MAPPING = "mapping"                    # dict: {"text": {norm_val: pseudonym}, "numeric": {col: multiplier}}
 MASKED_SHEETS = "masked_sheets"        # dict[str, pd.DataFrame]
 STATS = "stats"                        # dict: {"masked_values": int, "unique_entities": int}
+DL_XLSX = "dl_xlsx"                    # bytes — pre-generated masked xlsx for download
+DL_MAP_JSON = "dl_map_json"           # bytes — pre-generated mapping JSON
+DL_MAP_XLSX = "dl_map_xlsx"           # bytes — pre-generated mapping xlsx
 
 # Phase 3 keys — decryption page
 DECR_SHEETS = "decr_sheets"      # dict[str, pd.DataFrame] — uploaded masked file

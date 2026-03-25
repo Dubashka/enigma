@@ -14,7 +14,7 @@ else:
     st.sidebar.title("Enigma")
 page = st.sidebar.radio(
     "Режим",
-    ["Маскирование", "Дешифровка"],
+    ["Маскирование", "Дешифровка", "Помощь"],
     label_visibility="collapsed",
 )
 
@@ -23,4 +23,7 @@ if page == "Маскирование":
     render()
 elif page == "Дешифровка":
     from views.decryption import render
+    render()
+elif page == "Помощь":
+    from views.help import render
     render()

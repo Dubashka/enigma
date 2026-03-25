@@ -1,11 +1,12 @@
 import streamlit as st
 from core.output import generate_masked_xlsx, generate_mapping_json, generate_mapping_xlsx
 from core.state_keys import (
-    SHEETS, RAW_BYTES, STAGE, FILE_NAME,
+    SHEETS, RAW_BYTES, STAGE, FILE_NAME, FILE_PATH,
     STAGE_UPLOADED, STAGE_COLUMNS, STAGE_MASKED,
     SELECTED_COLUMNS, MASK_CONFIG, MAPPING, MASKED_SHEETS, STATS,
+    DL_XLSX, DL_MAP_JSON, DL_MAP_XLSX,
 )
-from core.parser import parse_upload
+from core.parser import save_upload, parse_preview, parse_full, cleanup_upload
 from core.detector import detect_sensitive_columns, classify_column_type
 from core.masker import mask_sheets
 from ui.upload_widget import render_preview
@@ -42,8 +43,11 @@ def _render_step_upload() -> None:
 
     if uploaded_file is not None:
         try:
-            sheets = parse_upload(uploaded_file)
-            st.session_state[SHEETS] = sheets
+            with st.spinner("Сохраняем и читаем превью файла…"):
+                path = save_upload(uploaded_file)
+                preview_sheets = parse_preview(path)
+            st.session_state[FILE_PATH] = path
+            st.session_state[SHEETS] = preview_sheets
             st.session_state[FILE_NAME] = uploaded_file.name
             st.session_state[STAGE] = STAGE_UPLOADED
             st.rerun()
@@ -57,13 +61,13 @@ def _render_step_preview() -> None:
     file_name = st.session_state.get(FILE_NAME, "файл")
 
     st.subheader(f"Превью: {file_name}")
+    st.caption("Показаны первые 20 строк каждого листа")
     render_preview(sheets)
 
     col_back, col_next = st.columns([1, 1])
     with col_back:
         if st.button("Сбросить", use_container_width=True):
-            for key in [SHEETS, RAW_BYTES, STAGE, FILE_NAME]:
-                st.session_state.pop(key, None)
+            _cleanup_and_reset()
             st.rerun()
     with col_next:
         if st.button("Далее", type="primary", use_container_width=True):
@@ -126,8 +130,32 @@ def _render_step_columns() -> None:
             if not any_selected:
                 st.warning("Выберите хотя бы одну колонку для маскирования")
             else:
-                masked_sheets, mapping, stats = mask_sheets(sheets, mask_config)
-                st.session_state[MASKED_SHEETS] = masked_sheets
+                # Full parse from disk — this is where the heavy work happens
+                file_path = st.session_state.get(FILE_PATH)
+                progress = st.progress(0, text="Читаем файл…")
+
+                if file_path:
+                    full_sheets = parse_full(file_path)
+                else:
+                    full_sheets = sheets
+
+                total_rows = sum(len(df) for df in full_sheets.values())
+                progress.progress(25, text=f"Файл прочитан ({total_rows:,} строк). Маскируем…")
+
+                masked_sheets, mapping, stats = mask_sheets(full_sheets, mask_config)
+                progress.progress(60, text="Маскирование завершено. Генерируем файлы для скачивания…")
+
+                # Pre-generate download files so buttons render instantly
+                st.session_state[DL_XLSX] = generate_masked_xlsx(masked_sheets)
+                progress.progress(85, text="Замаскированный файл готов. Генерируем маппинги…")
+
+                st.session_state[DL_MAP_JSON] = generate_mapping_json(mapping)
+                st.session_state[DL_MAP_XLSX] = generate_mapping_xlsx(mapping)
+                progress.progress(100, text="Готово!")
+
+                # Store only preview of masked data (first 20 rows per sheet)
+                preview_masked = {name: df.head(20) for name, df in masked_sheets.items()}
+                st.session_state[MASKED_SHEETS] = preview_masked
                 st.session_state[MAPPING] = mapping
                 st.session_state[STATS] = stats
                 st.session_state[MASK_CONFIG] = mask_config
@@ -153,27 +181,26 @@ def _render_step_masked() -> None:
     # Masked data preview (reuse existing render_preview widget)
     render_preview(masked_sheets)
 
-    # --- Download buttons ---
-    mapping = st.session_state[MAPPING]
+    # --- Download buttons (pre-generated, instant) ---
     base_name = file_name.rsplit(".", 1)[0] if "." in file_name else file_name
 
     st.download_button(
         label="Скачать замаскированный файл",
-        data=generate_masked_xlsx(masked_sheets),
+        data=st.session_state[DL_XLSX],
         file_name=f"{base_name}_masked.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True,
     )
     st.download_button(
         label="Скачать маппинг (JSON)",
-        data=generate_mapping_json(mapping),
+        data=st.session_state[DL_MAP_JSON],
         file_name=f"{base_name}_mapping.json",
         mime="application/json",
         use_container_width=True,
     )
     st.download_button(
         label="Скачать маппинг (Excel)",
-        data=generate_mapping_xlsx(mapping),
+        data=st.session_state[DL_MAP_XLSX],
         file_name=f"{base_name}_mapping.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True,
@@ -184,17 +211,25 @@ def _render_step_masked() -> None:
     with col_back:
         if st.button("Назад к выбору колонок", use_container_width=True):
             # Clear masking results but preserve checkbox states
-            for key in [MASKED_SHEETS, MAPPING, STATS]:
+            for key in [MASKED_SHEETS, MAPPING, STATS, DL_XLSX, DL_MAP_JSON, DL_MAP_XLSX]:
                 st.session_state.pop(key, None)
             st.session_state[STAGE] = STAGE_COLUMNS
             st.rerun()
     with col_reset:
         if st.button("Сбросить", use_container_width=True):
-            # Clear all state including dynamic checkbox/type keys
-            keys_to_clear = [k for k in st.session_state if k.startswith(("cb_", "type_"))]
-            for key in [
-                SHEETS, RAW_BYTES, STAGE, FILE_NAME,
-                SELECTED_COLUMNS, MASK_CONFIG, MAPPING, MASKED_SHEETS, STATS,
-            ] + keys_to_clear:
-                st.session_state.pop(key, None)
+            _cleanup_and_reset()
             st.rerun()
+
+
+def _cleanup_and_reset() -> None:
+    """Clear all state and remove uploaded file from disk."""
+    file_path = st.session_state.get(FILE_PATH)
+    if file_path:
+        cleanup_upload(file_path)
+    keys_to_clear = [k for k in st.session_state if k.startswith(("cb_", "type_"))]
+    for key in [
+        SHEETS, RAW_BYTES, STAGE, FILE_NAME, FILE_PATH,
+        SELECTED_COLUMNS, MASK_CONFIG, MAPPING, MASKED_SHEETS, STATS,
+        DL_XLSX, DL_MAP_JSON, DL_MAP_XLSX,
+    ] + keys_to_clear:
+        st.session_state.pop(key, None)
