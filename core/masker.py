@@ -27,14 +27,36 @@ _SKIP_WORDS = {
 # Utility functions
 # ---------------------------------------------------------------------------
 
-def _normalize(value: str) -> str:
-    """NFC normalization + strip + uppercase + remove quote variants + collapse spaces."""
+def _normalize_key(value: str) -> str:
+    """NFC normalization + strip + uppercase + remove quote variants + collapse spaces.
+
+    Used as a dict key for case-insensitive deduplication.
+    The original casing is NOT preserved — use _normalize_original for storage.
+    """
     s = unicodedata.normalize("NFC", str(value))
     s = s.strip().upper()
     # Remove all quote variants: curly, guillemets, apostrophe, straight
     s = re.sub(r'["\u201c\u201d\u00ab\u00bb\u2018\u2019\']', "", s)
     s = re.sub(r"\s+", " ", s)
     return s
+
+
+def _normalize_original(value: str) -> str:
+    """NFC normalization + strip + remove quote variants + collapse spaces.
+
+    Preserves the original casing — used to store the original value in the mapping JSON.
+    """
+    s = unicodedata.normalize("NFC", str(value))
+    s = s.strip()
+    # Remove all quote variants: curly, guillemets, apostrophe, straight
+    s = re.sub(r'["\u201c\u201d\u00ab\u00bb\u2018\u2019\']', "", s)
+    s = re.sub(r"\s+", " ", s)
+    return s
+
+
+# Keep _normalize as an alias for _normalize_key for backward compatibility
+def _normalize(value: str) -> str:
+    return _normalize_key(value)
 
 
 def _normalize_suffix(word: str) -> str:
@@ -94,14 +116,19 @@ def build_text_mapping(
     sheets: dict[str, pd.DataFrame],
     mask_config: dict[str, dict[str, str]],
 ) -> dict[str, str]:
-    """Build a single shared text mapping: {normalized_value -> pseudonym}.
+    """Build a single shared text mapping: {original_value -> pseudonym}.
 
     CRITICAL: This must be called once before any sheet is processed.
     The mapping and counters are global across all sheets to guarantee
     cross-sheet consistency (same original value -> same pseudonym everywhere).
+
+    Keys are stored with original casing (after NFC normalization and quote removal)
+    so the JSON mapping file preserves the source text exactly.
+    Deduplication uses an internal uppercase key to treat case variants as the same entity.
     """
-    mapping: dict[str, str] = {}
-    counters: dict[str, int] = {}  # prefix -> current count (global)
+    mapping: dict[str, str] = {}       # original_value -> pseudonym
+    seen_keys: set[str] = set()        # uppercase keys for deduplication
+    counters: dict[str, int] = {}      # prefix -> current count (global)
 
     for sheet_name, df in sheets.items():
         config = mask_config.get(sheet_name, {})
@@ -110,10 +137,12 @@ def build_text_mapping(
                 continue
             prefix = _derive_prefix(col)
             for raw_val in df[col].dropna().unique():
-                key = _normalize(str(raw_val))
-                if key not in mapping:
+                norm_key = _normalize_key(str(raw_val))
+                if norm_key not in seen_keys:
+                    seen_keys.add(norm_key)
                     counters[prefix] = counters.get(prefix, 0) + 1
-                    mapping[key] = f"{prefix} {_index_to_label(counters[prefix])}"
+                    original = _normalize_original(str(raw_val))
+                    mapping[original] = f"{prefix} {_index_to_label(counters[prefix])}"
     return mapping
 
 
@@ -140,15 +169,22 @@ def build_numeric_mapping(
 def apply_text_masking(series: pd.Series, mapping: dict[str, str]) -> pd.Series:
     """Vectorized text substitution. NaN cells remain NaN.
 
-    Optimization: builds a raw-value lookup dict from unique non-NaN values
-    so _normalize() is called only once per unique value, not per row.
+    Looks up each value using case-insensitive matching against the mapping keys
+    (which are stored with original casing). Falls back to the raw value if not found.
     """
-    # Build raw → pseudonym map from unique values (much smaller than full series)
+    # Build raw → pseudonym map from unique values
     raw_lookup: dict = {}
     for raw_val in series.dropna().unique():
-        key = _normalize(str(raw_val))
-        if key in mapping:
-            raw_lookup[raw_val] = mapping[key]
+        original = _normalize_original(str(raw_val))
+        # Try exact match first, then case-insensitive fallback
+        if original in mapping:
+            raw_lookup[raw_val] = mapping[original]
+        else:
+            norm_key = _normalize_key(str(raw_val))
+            for map_key, pseudonym in mapping.items():
+                if _normalize_key(map_key) == norm_key:
+                    raw_lookup[raw_val] = pseudonym
+                    break
 
     if not raw_lookup:
         return series
@@ -184,7 +220,7 @@ def mask_sheets(
     Returns:
         (masked_sheets, mapping, stats) where:
         - masked_sheets: {sheet_name: masked DataFrame}
-        - mapping: {"text": {norm_val: pseudonym}, "numeric": {col: multiplier}}
+        - mapping: {"text": {original_val: pseudonym}, "numeric": {col: multiplier}}
         - stats: {"masked_values": int, "unique_entities": int}
     """
     # Phase A: Build shared mappings (single pass, all sheets)
