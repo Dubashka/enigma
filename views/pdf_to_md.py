@@ -116,8 +116,8 @@ def _render_step_result() -> None:
     col2.metric("Символов", f"{len(md_text):,}")
     col3.metric("Слов",     f"{len(md_text.split()):,}")
 
-    st.markdown("**Превью (первые 2000 символов)**")
-    st.code(md_text[:2000] + ("…" if len(md_text) > 2000 else ""), language="markdown")
+    st.markdown("**Превью (первые 1000 символов)**")
+    st.code(md_text[:1000] + ("…" if len(md_text) > 1000 else ""), language="markdown")
 
     st.download_button(
         label="Скачать .md файл",
