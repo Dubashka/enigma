@@ -10,9 +10,9 @@ import tempfile
 
 import streamlit as st
 
-from ui.step_indicator import render_steps
+from ui.step_indicator import render_steps, STEPS_PDF_MD
 
-_STAGE     = "pdf_md_stage"
+_STAGE         = "pdf_md_stage"
 _STAGE_UPLOAD  = "upload"
 _STAGE_CONVERT = "convert"
 _STAGE_RESULT  = "result"
@@ -21,8 +21,6 @@ _FILE_PATH  = "pdf_md_file_path"
 _FILE_NAME  = "pdf_md_file_name"
 _PAGE_COUNT = "pdf_md_page_count"
 _MD_RESULT  = "pdf_md_result"
-
-STEPS = ["Загрузка PDF", "Настройка", "Результат"]
 
 
 def render() -> None:
@@ -37,7 +35,7 @@ def render() -> None:
 
 
 def _render_step_upload() -> None:
-    render_steps(current=1)
+    render_steps(current=1, steps=STEPS_PDF_MD)
     st.subheader("Загрузите PDF-файл")
     st.caption("Поддерживаются текстовые PDF (не сканы). Максимальный размер: 300 MB.")
 
@@ -63,11 +61,11 @@ def _render_step_upload() -> None:
 
 
 def _render_step_convert() -> None:
-    render_steps(current=2)
+    render_steps(current=2, steps=STEPS_PDF_MD)
     file_name  = st.session_state.get(_FILE_NAME, "файл")
     page_count = st.session_state.get(_PAGE_COUNT, "?")
 
-    st.subheader("Настройка конвертации")
+    st.subheader("Конвертация")
     st.markdown(
         f"""
         <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;
@@ -104,7 +102,7 @@ def _render_step_convert() -> None:
 
 
 def _render_step_result() -> None:
-    render_steps(current=3)
+    render_steps(current=3, steps=STEPS_PDF_MD)
     md_text   = st.session_state[_MD_RESULT]
     file_name = st.session_state.get(_FILE_NAME, "файл")
     base      = file_name.rsplit(".", 1)[0] if "." in file_name else file_name
@@ -129,7 +127,7 @@ def _render_step_result() -> None:
 
     col_back, col_reset = st.columns([1, 1])
     with col_back:
-        if st.button("Назад к настройкам", use_container_width=True):
+        if st.button("Назад к конвертации", use_container_width=True):
             st.session_state.pop(_MD_RESULT, None)
             st.session_state[_STAGE] = _STAGE_CONVERT
             st.rerun()

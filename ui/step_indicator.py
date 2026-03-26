@@ -1,7 +1,8 @@
 import streamlit as st
 
-STEPS_MASKING = ["Загрузка файла", "Выбор колонок", "Результат"]
+STEPS_MASKING    = ["Загрузка файла", "Выбор колонок", "Результат"]
 STEPS_DECRYPTION = ["Загрузка файла", "Демаскирование", "Результат"]
+STEPS_PDF_MD     = ["Загрузка файла", "Конвертация",    "Результат"]
 
 # Keep old name for backward compatibility
 STEPS = STEPS_MASKING
