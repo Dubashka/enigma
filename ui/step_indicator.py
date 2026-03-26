@@ -1,12 +1,23 @@
 import streamlit as st
 
-STEPS = ["Загрузка файла", "Выбор колонок", "Результат"]
+STEPS_MASKING = ["Загрузка файла", "Выбор колонок", "Результат"]
+STEPS_DECRYPTION = ["Загрузка файла", "Дешифровка", "Результат"]
+
+# Keep old name for backward compatibility
+STEPS = STEPS_MASKING
 
 
-def render_steps(current: int) -> None:
-    """Render step indicator. current is 1-based (1, 2, or 3)."""
-    cols = st.columns(len(STEPS))
-    for i, (col, label) in enumerate(zip(cols, STEPS), start=1):
+def render_steps(current: int, steps: list[str] | None = None) -> None:
+    """Render step indicator. current is 1-based (1, 2, or 3).
+
+    Args:
+        current: current active step (1-based)
+        steps:   list of step labels; defaults to STEPS_MASKING
+    """
+    if steps is None:
+        steps = STEPS_MASKING
+    cols = st.columns(len(steps))
+    for i, (col, label) in enumerate(zip(cols, steps), start=1):
         if i == current:
             col.markdown(f"**:blue[Шаг {i}: {label}]**")
         elif i < current:
