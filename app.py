@@ -7,19 +7,23 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-from ui.sidebar import render_sidebar
+_logo = pathlib.Path(__file__).parent / "assets" / "logo.png"
+if _logo.exists():
+    st.sidebar.image(str(_logo), use_container_width=True)
+else:
+    st.sidebar.title("Enigma")
+page = st.sidebar.radio(
+    "Режим",
+    ["Маскирование", "Дешифровка", "Помощь"],
+    label_visibility="collapsed",
+)
 
-page = render_sidebar()
-
-if page == "excel_mask":
+if page == "Маскирование":
     from views.masking import render
     render()
-elif page == "excel_decrypt":
+elif page == "Дешифровка":
     from views.decryption import render
     render()
-elif page in ("word_mask", "word_decrypt", "pdf_to_word", "pdf_to_md"):
-    from views.wip import render
-    render(page)
-elif page == "help":
+elif page == "Помощь":
     from views.help import render
     render()
