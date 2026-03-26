@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import io
 import json
-import copy
 
 import pandas as pd
 
@@ -29,11 +28,11 @@ def generate_formatted_xlsx(
     """Replace cell values in the original xlsx file in-place, preserving all formatting.
 
     Strategy:
-    - Open the original file with openpyxl (keep_vba=False, data_only=False)
+    - Open the original file with openpyxl
     - For each sheet in masked_sheets, match rows by position (header row = row 1)
-    - Replace only data cells; skip header row (row index 0 in DataFrame = Excel row 2)
-    - Cells not covered by the DataFrame are left untouched
-    - Returns bytes of the modified workbook
+    - Replace only data cells; columns not in the DataFrame are left untouched
+    - Uses iterrows + direct column-name access to avoid itertuples name mangling
+      (itertuples renames columns with spaces/special chars, causing getattr to return None)
 
     Args:
         source_path:   path to the original uploaded xlsx file on disk
@@ -49,27 +48,32 @@ def generate_formatted_xlsx(
         ws = wb[sheet_name]
 
         # Build column index: col_name -> Excel column number (1-based)
-        # Header is assumed to be in row 1
         header_map: dict[str, int] = {}
         for cell in ws[1]:
             if cell.value is not None:
                 header_map[str(cell.value)] = cell.column
 
         # Write DataFrame values starting from Excel row 2
-        for df_row_idx, df_row in enumerate(df.itertuples(index=False), start=2):
+        # iterrows gives direct access by column name — no name mangling
+        for df_row_idx, row in df.iterrows():
+            excel_row = df_row_idx + 2  # df index is 0-based, Excel data starts at row 2
             for col_name in df.columns:
                 if col_name not in header_map:
                     continue
                 col_num = header_map[col_name]
-                new_val = getattr(df_row, col_name.replace(" ", "_").replace("/", "_"), None)
+                new_val = row[col_name]
                 # pandas NA / NaN — write None to keep cell empty
-                if pd.isna(new_val) if not isinstance(new_val, str) else False:
-                    ws.cell(row=df_row_idx, column=col_num).value = None
+                try:
+                    is_na = pd.isna(new_val)
+                except (TypeError, ValueError):
+                    is_na = False
+                if is_na:
+                    ws.cell(row=excel_row, column=col_num).value = None
                 else:
                     # Convert numpy/pandas types to native Python for openpyxl
                     if hasattr(new_val, "item"):
                         new_val = new_val.item()
-                    ws.cell(row=df_row_idx, column=col_num).value = new_val
+                    ws.cell(row=excel_row, column=col_num).value = new_val
 
     buf = io.BytesIO()
     wb.save(buf)
