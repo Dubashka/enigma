@@ -1,7 +1,7 @@
 import streamlit as st
 
 STEPS_MASKING = ["Загрузка файла", "Выбор колонок", "Результат"]
-STEPS_DECRYPTION = ["Загрузка файла", "Дешифровка", "Результат"]
+STEPS_DECRYPTION = ["Загрузка файла", "Демаскирование", "Результат"]
 
 # Keep old name for backward compatibility
 STEPS = STEPS_MASKING
