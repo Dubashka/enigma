@@ -1,10 +1,10 @@
 import streamlit as st
-from core.output import generate_masked_xlsx, generate_mapping_json, generate_mapping_xlsx
+from core.output import generate_masked_xlsx, generate_formatted_xlsx, generate_mapping_json, generate_mapping_xlsx
 from core.state_keys import (
     SHEETS, RAW_BYTES, STAGE, FILE_NAME, FILE_PATH,
     STAGE_UPLOADED, STAGE_COLUMNS, STAGE_MASKED,
     SELECTED_COLUMNS, MASK_CONFIG, MAPPING, MASKED_SHEETS, STATS,
-    DL_XLSX, DL_MAP_JSON, DL_MAP_XLSX,
+    DL_XLSX, DL_MAP_JSON, DL_MAP_XLSX, FORMAT_MODE,
 )
 from core.parser import save_upload, parse_preview, parse_full, cleanup_upload
 from core.detector import detect_sensitive_columns, classify_column_type
@@ -59,10 +59,35 @@ def _render_step_preview() -> None:
     render_steps(current=1)
     sheets = st.session_state[SHEETS]
     file_name = st.session_state.get(FILE_NAME, "файл")
+    is_xlsx = file_name.lower().endswith(".xlsx")
 
     st.subheader(f"Превью: {file_name}")
     st.caption("Показаны первые 20 строк каждого листа")
     render_preview(sheets)
+
+    # Format mode selector — only meaningful for xlsx (csv has no formatting)
+    if is_xlsx:
+        st.divider()
+        st.markdown("**Формат выходного файла**")
+        format_choice = st.radio(
+            "Формат выходного файла",
+            options=["raw", "formatted"],
+            format_func=lambda x: (
+                "Без форматирования (быстро)" if x == "raw"
+                else "Сохранить форматирование оригинала"
+            ),
+            index=0 if st.session_state.get(FORMAT_MODE, "raw") == "raw" else 1,
+            horizontal=True,
+            label_visibility="collapsed",
+        )
+        st.session_state[FORMAT_MODE] = format_choice
+        if format_choice == "formatted":
+            st.caption("Цвета ячеек, шрифты, границы и ширина колонок будут сохранены из оригинального файла.")
+        else:
+            st.caption("Выходной файл будет содержать только данные без стилей.")
+    else:
+        # CSV — formatting not applicable
+        st.session_state[FORMAT_MODE] = "raw"
 
     col_back, col_next = st.columns([1, 1])
     with col_back:
@@ -108,13 +133,11 @@ def _render_step_columns() -> None:
                     checked = st.session_state.get(f"cb_{sheet_name}_{col}", False)
                     if checked:
                         any_selected = True
-                        # Determine masking type
                         col_type = classify_column_type(col, df[col])
                         if (
                             pd.api.types.is_numeric_dtype(df[col])
                             and col_type == "numeric"
                         ):
-                            # User may have toggled to "идентификатор"
                             user_choice = st.session_state.get(
                                 f"type_{sheet_name}_{col}", "коэффициент"
                             )
@@ -123,14 +146,12 @@ def _render_step_columns() -> None:
                             else:
                                 sheet_config[col] = "numeric"
                         else:
-                            # Text-dtype columns always get text masking
                             sheet_config[col] = "text"
                 mask_config[sheet_name] = sheet_config
 
             if not any_selected:
                 st.warning("Выберите хотя бы одну колонку для маскирования")
             else:
-                # Full parse from disk — this is where the heavy work happens
                 file_path = st.session_state.get(FILE_PATH)
                 progress = st.progress(0, text="Читаем файл…")
 
@@ -145,15 +166,18 @@ def _render_step_columns() -> None:
                 masked_sheets, mapping, stats = mask_sheets(full_sheets, mask_config)
                 progress.progress(60, text="Маскирование завершено. Генерируем файлы для скачивания…")
 
-                # Pre-generate download files so buttons render instantly
-                st.session_state[DL_XLSX] = generate_masked_xlsx(masked_sheets)
+                # Generate output according to chosen format mode
+                format_mode = st.session_state.get(FORMAT_MODE, "raw")
+                if format_mode == "formatted" and file_path and file_path.lower().endswith(".xlsx"):
+                    st.session_state[DL_XLSX] = generate_formatted_xlsx(file_path, masked_sheets)
+                else:
+                    st.session_state[DL_XLSX] = generate_masked_xlsx(masked_sheets)
                 progress.progress(85, text="Замаскированный файл готов. Генерируем маппинги…")
 
                 st.session_state[DL_MAP_JSON] = generate_mapping_json(mapping)
                 st.session_state[DL_MAP_XLSX] = generate_mapping_xlsx(mapping)
                 progress.progress(100, text="Готово!")
 
-                # Store only preview of masked data (first 20 rows per sheet)
                 preview_masked = {name: df.head(20) for name, df in masked_sheets.items()}
                 st.session_state[MASKED_SHEETS] = preview_masked
                 st.session_state[MAPPING] = mapping
@@ -168,8 +192,15 @@ def _render_step_masked() -> None:
     masked_sheets = st.session_state[MASKED_SHEETS]
     stats = st.session_state[STATS]
     file_name = st.session_state.get(FILE_NAME, "файл")
+    format_mode = st.session_state.get(FORMAT_MODE, "raw")
 
     st.subheader(f"Результат маскирования: {file_name}")
+
+    # Format mode badge
+    if format_mode == "formatted":
+        st.caption("✅ Форматирование оригинала сохранено")
+    else:
+        st.caption("📄 Без форматирования")
 
     # Statistics
     stat_col1, stat_col2 = st.columns(2)
@@ -178,10 +209,8 @@ def _render_step_masked() -> None:
     with stat_col2:
         st.metric("Уникальных сущностей", stats["unique_entities"])
 
-    # Masked data preview (reuse existing render_preview widget)
     render_preview(masked_sheets)
 
-    # --- Download buttons (pre-generated, instant) ---
     base_name = file_name.rsplit(".", 1)[0] if "." in file_name else file_name
 
     st.download_button(
@@ -206,11 +235,9 @@ def _render_step_masked() -> None:
         use_container_width=True,
     )
 
-    # Navigation
     col_back, col_reset = st.columns([1, 1])
     with col_back:
         if st.button("Назад к выбору колонок", use_container_width=True):
-            # Clear masking results but preserve checkbox states
             for key in [MASKED_SHEETS, MAPPING, STATS, DL_XLSX, DL_MAP_JSON, DL_MAP_XLSX]:
                 st.session_state.pop(key, None)
             st.session_state[STAGE] = STAGE_COLUMNS
@@ -230,6 +257,6 @@ def _cleanup_and_reset() -> None:
     for key in [
         SHEETS, RAW_BYTES, STAGE, FILE_NAME, FILE_PATH,
         SELECTED_COLUMNS, MASK_CONFIG, MAPPING, MASKED_SHEETS, STATS,
-        DL_XLSX, DL_MAP_JSON, DL_MAP_XLSX,
+        DL_XLSX, DL_MAP_JSON, DL_MAP_XLSX, FORMAT_MODE,
     ] + keys_to_clear:
         st.session_state.pop(key, None)

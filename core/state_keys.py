@@ -20,7 +20,11 @@ DL_XLSX = "dl_xlsx"                    # bytes — pre-generated masked xlsx for
 DL_MAP_JSON = "dl_map_json"           # bytes — pre-generated mapping JSON
 DL_MAP_XLSX = "dl_map_xlsx"           # bytes — pre-generated mapping xlsx
 
+# Format mode key
+FORMAT_MODE = "format_mode"            # str — "raw" | "formatted"
+
 # Phase 3 keys — decryption page
 DECR_SHEETS = "decr_sheets"      # dict[str, pd.DataFrame] — uploaded masked file
 DECR_MAPPING = "decr_mapping"    # dict — loaded JSON mapping
 DECR_RESULT = "decr_result"      # dict[str, pd.DataFrame] — decrypted sheets
+DECR_FILE_PATH = "decr_file_path"  # str — path to uploaded masked file on disk
