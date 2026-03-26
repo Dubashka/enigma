@@ -28,79 +28,44 @@ _SKIP_WORDS = {
 # ---------------------------------------------------------------------------
 
 def _normalize_key(value: str) -> str:
-    """NFC normalization + strip + uppercase + remove quote variants + collapse spaces.
-
-    Used as a dict key for case-insensitive deduplication.
-    The original casing is NOT preserved — use _normalize_original for storage.
-    """
+    """NFC normalization + strip + uppercase + remove quote variants + collapse spaces."""
     s = unicodedata.normalize("NFC", str(value))
     s = s.strip().upper()
-    # Remove all quote variants: curly, guillemets, apostrophe, straight
     s = re.sub(r'["\u201c\u201d\u00ab\u00bb\u2018\u2019\']', "", s)
     s = re.sub(r"\s+", " ", s)
     return s
 
 
 def _normalize_original(value: str) -> str:
-    """NFC normalization + strip + remove quote variants + collapse spaces.
-
-    Preserves the original casing — used to store the original value in the mapping JSON.
-    """
+    """NFC normalization + strip + remove quote variants + collapse spaces (preserves casing)."""
     s = unicodedata.normalize("NFC", str(value))
     s = s.strip()
-    # Remove all quote variants: curly, guillemets, apostrophe, straight
     s = re.sub(r'["\u201c\u201d\u00ab\u00bb\u2018\u2019\']', "", s)
     s = re.sub(r"\s+", " ", s)
     return s
 
 
-# Keep _normalize as an alias for _normalize_key for backward compatibility
 def _normalize(value: str) -> str:
     return _normalize_key(value)
 
 
 def _normalize_suffix(word: str) -> str:
-    """Convert common Russian genitive suffixes to nominative for cleaner prefixes.
-
-    Examples:
-        "предприятия" -> "предприятие"
-        "изменения"   -> "изменение"
-        "места"       -> "место"
-    """
     w = word.lower()
-    if w.endswith("ия"):
-        return word[:-2] + "ие"
     if w.endswith("ия"):
         return word[:-2] + "ие"
     return word
 
 
 def _derive_prefix(col_name: str) -> str:
-    """Derive a human-readable prefix from a column name.
-
-    Algorithm: split by spaces, filter out _SKIP_WORDS (case-insensitive),
-    take the first remaining word, apply suffix normalization, and capitalize it.
-    Fallback: first word of col_name capitalized.
-
-    Examples:
-        "Имя предприятия"            -> "Предприятие" (skip "имя", normalize genitive)
-        "Наименование рабочего места" -> "Рабочего" (skip "наименование", take first remaining)
-        "Автор изменения"            -> "Автор" (no skips, take first word)
-    """
     words = col_name.split()
     meaningful = [w for w in words if w.lower() not in _SKIP_WORDS]
     if meaningful:
         word = _normalize_suffix(meaningful[0])
         return word.capitalize()
-    # Fallback: first word
     return words[0].capitalize() if words else col_name.capitalize()
 
 
 def _index_to_label(n: int) -> str:
-    """Convert 1-based integer to Excel-column-style letter label.
-
-    1 -> A, 2 -> B, 26 -> Z, 27 -> AA, 28 -> AB, ...
-    """
     label = ""
     while n > 0:
         n, remainder = divmod(n - 1, 26)
@@ -116,19 +81,10 @@ def build_text_mapping(
     sheets: dict[str, pd.DataFrame],
     mask_config: dict[str, dict[str, str]],
 ) -> dict[str, str]:
-    """Build a single shared text mapping: {original_value -> pseudonym}.
-
-    CRITICAL: This must be called once before any sheet is processed.
-    The mapping and counters are global across all sheets to guarantee
-    cross-sheet consistency (same original value -> same pseudonym everywhere).
-
-    Keys are stored with original casing (after NFC normalization and quote removal)
-    so the JSON mapping file preserves the source text exactly.
-    Deduplication uses an internal uppercase key to treat case variants as the same entity.
-    """
-    mapping: dict[str, str] = {}       # original_value -> pseudonym
-    seen_keys: set[str] = set()        # uppercase keys for deduplication
-    counters: dict[str, int] = {}      # prefix -> current count (global)
+    """Build a single shared text mapping: {original_value -> pseudonym}."""
+    mapping: dict[str, str] = {}
+    seen_keys: set[str] = set()
+    counters: dict[str, int] = {}
 
     for sheet_name, df in sheets.items():
         config = mask_config.get(sheet_name, {})
@@ -150,10 +106,7 @@ def build_numeric_mapping(
     sheets: dict[str, pd.DataFrame],
     mask_config: dict[str, dict[str, str]],
 ) -> dict[str, float]:
-    """Build {col_name -> coefficient} where coefficient in [0.5, 1.5].
-
-    One coefficient per unique column name, shared across all sheets.
-    """
+    """Build {col_name -> coefficient} where coefficient in [0.5, 1.5]."""
     numeric_cols: set[str] = set()
     for config in mask_config.values():
         for col, col_type in config.items():
@@ -169,22 +122,21 @@ def build_numeric_mapping(
 def apply_text_masking(series: pd.Series, mapping: dict[str, str]) -> pd.Series:
     """Vectorized text substitution. NaN cells remain NaN.
 
-    Looks up each value using case-insensitive matching against the mapping keys
-    (which are stored with original casing). Falls back to the raw value if not found.
+    Performance: builds raw->pseudonym lookup in a single pass using
+    pre-normalised keys — no nested loops or repeated dict scans.
     """
-    # Build raw → pseudonym map from unique values
+    # Pre-build uppercase key -> pseudonym for O(1) lookup
+    key_to_pseudo: dict[str, str] = {
+        _normalize_key(k): v for k, v in mapping.items()
+    }
+
+    # Build raw_value -> pseudonym for every unique value in this series
     raw_lookup: dict = {}
     for raw_val in series.dropna().unique():
-        original = _normalize_original(str(raw_val))
-        # Try exact match first, then case-insensitive fallback
-        if original in mapping:
-            raw_lookup[raw_val] = mapping[original]
-        else:
-            norm_key = _normalize_key(str(raw_val))
-            for map_key, pseudonym in mapping.items():
-                if _normalize_key(map_key) == norm_key:
-                    raw_lookup[raw_val] = pseudonym
-                    break
+        norm_key = _normalize_key(str(raw_val))
+        pseudo = key_to_pseudo.get(norm_key)
+        if pseudo is not None:
+            raw_lookup[raw_val] = pseudo
 
     if not raw_lookup:
         return series
@@ -193,10 +145,7 @@ def apply_text_masking(series: pd.Series, mapping: dict[str, str]) -> pd.Series:
 
 
 def apply_numeric_masking(series: pd.Series, multiplier: float) -> pd.Series:
-    """Multiply by coefficient. Integer series stay integer (no float noise).
-
-    Uses nullable Int64 to correctly handle potential NaN in integer columns.
-    """
+    """Multiply by coefficient. Integer series stay integer (no float noise)."""
     result = series * multiplier
     if pd.api.types.is_integer_dtype(series):
         return result.round().astype("Int64")
@@ -211,23 +160,10 @@ def mask_sheets(
     sheets: dict[str, pd.DataFrame],
     mask_config: dict[str, dict[str, str]],
 ) -> tuple[dict[str, pd.DataFrame], dict, dict]:
-    """Mask all sheets according to mask_config.
-
-    Args:
-        sheets: {sheet_name: DataFrame} — original data
-        mask_config: {sheet_name: {col_name: "text"|"numeric"}}
-
-    Returns:
-        (masked_sheets, mapping, stats) where:
-        - masked_sheets: {sheet_name: masked DataFrame}
-        - mapping: {"text": {original_val: pseudonym}, "numeric": {col: multiplier}}
-        - stats: {"masked_values": int, "unique_entities": int}
-    """
-    # Phase A: Build shared mappings (single pass, all sheets)
+    """Mask all sheets according to mask_config."""
     text_mapping = build_text_mapping(sheets, mask_config)
     numeric_mapping = build_numeric_mapping(sheets, mask_config)
 
-    # Phase B: Apply masking sheet by sheet
     masked_sheets: dict[str, pd.DataFrame] = {}
     masked_values_count = 0
 

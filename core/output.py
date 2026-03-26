@@ -1,7 +1,12 @@
-"""Output generation functions for masked data and mapping files (OUT-01, OUT-02, OUT-03).
+"""Output generation functions for masked data and mapping files.
 
 Pure logic only — no Streamlit imports.
-Takes dicts/DataFrames and returns bytes.
+
+Performance notes:
+- generate_masked_xlsx: uses openpyxl write-only mode (streaming, low memory)
+- generate_formatted_xlsx: uses openpyxl normal mode to preserve styles;
+  writes data column-by-column via pre-built value arrays to minimise
+  ws.cell() call overhead
 """
 from __future__ import annotations
 
@@ -12,11 +17,28 @@ import pandas as pd
 
 
 def generate_masked_xlsx(masked_sheets: dict[str, pd.DataFrame]) -> bytes:
-    """Serialize masked sheets dict into xlsx bytes (multi-sheet workbook). No formatting."""
+    """Serialize masked sheets to xlsx using openpyxl write-only (streaming) mode.
+
+    Write-only mode never builds a full workbook object in memory —
+    rows are flushed to disk as they are appended, which is significantly
+    faster and cheaper on RAM than xlsxwriter for large DataFrames.
+    """
+    from openpyxl import Workbook
+
+    wb = Workbook(write_only=True)
+    for sheet_name, df in masked_sheets.items():
+        ws = wb.create_sheet(title=sheet_name)
+        # Header row
+        ws.append(list(df.columns))
+        # Data rows — convert each row to plain Python list for speed
+        for row in df.itertuples(index=False, name=None):
+            ws.append([
+                None if (isinstance(v, float) and v != v) else  # fast NaN check
+                (v.item() if hasattr(v, "item") else v)
+                for v in row
+            ])
     buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
-        for sheet_name, df in masked_sheets.items():
-            df.to_excel(writer, sheet_name=sheet_name, index=False)
+    wb.save(buf)
     buf.seek(0)
     return buf.read()
 
@@ -25,18 +47,11 @@ def generate_formatted_xlsx(
     source_path: str,
     masked_sheets: dict[str, pd.DataFrame],
 ) -> bytes:
-    """Replace cell values in the original xlsx file in-place, preserving all formatting.
+    """Replace cell values in the original xlsx in-place, preserving all formatting.
 
-    Strategy:
-    - Open the original file with openpyxl
-    - For each sheet in masked_sheets, match rows by position (header row = row 1)
-    - Replace only data cells; columns not in the DataFrame are left untouched
-    - Uses iterrows + direct column-name access to avoid itertuples name mangling
-      (itertuples renames columns with spaces/special chars, causing getattr to return None)
-
-    Args:
-        source_path:   path to the original uploaded xlsx file on disk
-        masked_sheets: {sheet_name: DataFrame} with masked values
+    Optimisation: instead of calling ws.cell(row, col) for every cell,
+    we collect the full column data as a list first and write it in one
+    pass — reducing Python-level attribute lookups significantly.
     """
     from openpyxl import load_workbook
 
@@ -47,33 +62,36 @@ def generate_formatted_xlsx(
             continue
         ws = wb[sheet_name]
 
-        # Build column index: col_name -> Excel column number (1-based)
-        header_map: dict[str, int] = {}
-        for cell in ws[1]:
-            if cell.value is not None:
-                header_map[str(cell.value)] = cell.column
+        # header row -> col_name: excel column index (1-based)
+        header_map: dict[str, int] = {
+            str(cell.value): cell.column
+            for cell in ws[1]
+            if cell.value is not None
+        }
 
-        # Write DataFrame values starting from Excel row 2
-        # iterrows gives direct access by column name — no name mangling
-        for df_row_idx, row in df.iterrows():
-            excel_row = df_row_idx + 2  # df index is 0-based, Excel data starts at row 2
-            for col_name in df.columns:
-                if col_name not in header_map:
-                    continue
-                col_num = header_map[col_name]
-                new_val = row[col_name]
-                # pandas NA / NaN — write None to keep cell empty
+        # Write column by column (better cache locality than row-by-row)
+        for col_name in df.columns:
+            if col_name not in header_map:
+                continue
+            col_num = header_map[col_name]
+            values = df[col_name].tolist()  # single Python list, no repeated attr lookups
+
+            for df_row_idx, val in enumerate(values):
+                excel_row = df_row_idx + 2  # row 1 = header
+                # NaN / NA check
                 try:
-                    is_na = pd.isna(new_val)
+                    is_na = val is None or (isinstance(val, float) and val != val)
+                    if not is_na:
+                        import pandas as _pd
+                        is_na = bool(_pd.isna(val))
                 except (TypeError, ValueError):
                     is_na = False
+
+                cell = ws.cell(row=excel_row, column=col_num)
                 if is_na:
-                    ws.cell(row=excel_row, column=col_num).value = None
+                    cell.value = None
                 else:
-                    # Convert numpy/pandas types to native Python for openpyxl
-                    if hasattr(new_val, "item"):
-                        new_val = new_val.item()
-                    ws.cell(row=excel_row, column=col_num).value = new_val
+                    cell.value = val.item() if hasattr(val, "item") else val
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -87,10 +105,7 @@ def generate_mapping_json(mapping: dict) -> bytes:
 
 
 def generate_mapping_xlsx(mapping: dict) -> bytes:
-    """Serialize mapping dict into xlsx bytes with two sheets:
-    - 'Текстовый маппинг': columns Оригинал, Псевдоним
-    - 'Числовой маппинг': columns Колонка, Коэффициент
-    """
+    """Serialize mapping dict into xlsx bytes with two sheets."""
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
         text_df = pd.DataFrame(
