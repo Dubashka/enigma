@@ -16,7 +16,7 @@ _FILE_NAME = "decr_file_name"
 
 
 def render() -> None:
-    st.header("Дешифровка данных")
+    st.header("Демаскирование данных")
 
     stage = st.session_state.get(_STAGE, _STAGE_UPLOAD)
 
