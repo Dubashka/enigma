@@ -15,14 +15,14 @@ else:
 
 page = st.sidebar.radio(
     "Режим",
-    ["Маскирование", "Дешифровка", "PDF → Markdown", "Помощь"],
+    ["Маскирование", "Демаскирование", "PDF → Markdown", "Помощь"],
     label_visibility="collapsed",
 )
 
 if page == "Маскирование":
     from views.masking import render
     render()
-elif page == "Дешифровка":
+elif page == "Демаскирование":
     from views.decryption import render
     render()
 elif page == "PDF → Markdown":
