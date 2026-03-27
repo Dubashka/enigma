@@ -1,7 +1,7 @@
-"""PDF → Markdown conversion view (3-step flow).
+"""File → Markdown conversion view (3-step flow).
 
-Uses markitdown for fast text-based PDF conversion.
-No OCR — works best with native text PDFs.
+Supported formats: PDF, DOCX, PPTX, XLSX, CSV, JSON.
+Uses markitdown for conversion — works best with text-based files.
 """
 from __future__ import annotations
 
@@ -19,12 +19,23 @@ _STAGE_RESULT  = "result"
 
 _FILE_PATH  = "pdf_md_file_path"
 _FILE_NAME  = "pdf_md_file_name"
-_PAGE_COUNT = "pdf_md_page_count"
+_FILE_SIZE  = "pdf_md_file_size"
 _MD_RESULT  = "pdf_md_result"
+
+_SUPPORTED_TYPES = ["pdf", "docx", "pptx", "xlsx", "csv", "json"]
+
+_TYPE_LABELS = {
+    "pdf":  "PDF документ",
+    "docx": "Word документ",
+    "pptx": "PowerPoint презентация",
+    "xlsx": "Excel таблица",
+    "csv":  "CSV файл",
+    "json": "JSON файл",
+}
 
 
 def render() -> None:
-    st.header("Конвертация PDF → Markdown")
+    st.header("Конвертация в Markdown")
     stage = st.session_state.get(_STAGE, _STAGE_UPLOAD)
     if stage == _STAGE_UPLOAD:
         _render_step_upload()
@@ -36,12 +47,16 @@ def render() -> None:
 
 def _render_step_upload() -> None:
     render_steps(current=1, steps=STEPS_PDF_MD)
-    st.subheader("Загрузите PDF-файл")
-    st.caption("Поддерживаются текстовые PDF (не сканы). Максимальный размер: 300 MB.")
+    st.subheader("Загрузите файл")
+    st.caption(
+        "Поддерживаемые форматы: "
+        + ", ".join(f"**.{t}**" for t in _SUPPORTED_TYPES)
+        + ". Максимальный размер: 300 MB."
+    )
 
     uploaded = st.file_uploader(
-        "Выберите PDF-файл",
-        type=["pdf"],
+        "Выберите файл",
+        type=_SUPPORTED_TYPES,
         key="pdf_md_uploader",
     )
 
@@ -50,38 +65,42 @@ def _render_step_upload() -> None:
             upload_dir = os.path.join(tempfile.gettempdir(), "enigma_uploads")
             os.makedirs(upload_dir, exist_ok=True)
             file_path = os.path.join(upload_dir, uploaded.name)
+            file_bytes = uploaded.read()
             with open(file_path, "wb") as f:
-                f.write(uploaded.read())
+                f.write(file_bytes)
 
-            st.session_state[_FILE_PATH]  = file_path
-            st.session_state[_FILE_NAME]  = uploaded.name
-            st.session_state[_PAGE_COUNT] = _count_pages(file_path)
-            st.session_state[_STAGE]      = _STAGE_CONVERT
+            st.session_state[_FILE_PATH] = file_path
+            st.session_state[_FILE_NAME] = uploaded.name
+            st.session_state[_FILE_SIZE] = len(file_bytes)
+            st.session_state[_STAGE]     = _STAGE_CONVERT
             st.rerun()
 
 
 def _render_step_convert() -> None:
     render_steps(current=2, steps=STEPS_PDF_MD)
-    file_name  = st.session_state.get(_FILE_NAME, "файл")
-    page_count = st.session_state.get(_PAGE_COUNT, "?")
+    file_name = st.session_state.get(_FILE_NAME, "файл")
+    file_size = st.session_state.get(_FILE_SIZE, 0)
+    ext       = file_name.rsplit(".", 1)[-1].lower() if "." in file_name else ""
+    type_label = _TYPE_LABELS.get(ext, "Файл")
+    size_str  = f"{file_size / 1_048_576:.2f} MB" if file_size >= 1_048_576 else f"{file_size / 1024:.1f} KB"
 
     st.subheader("Конвертация")
     st.markdown(
         f"""
         <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;
                     padding:1rem 1.2rem;margin-bottom:1rem;display:flex;gap:1rem;align-items:center">
-            <span style="font-size:2rem">📄</span>
+            <span style="font-size:2rem">{_file_emoji(ext)}</span>
             <div>
                 <div style="font-weight:600;color:#1e293b">{file_name}</div>
-                <div style="font-size:0.85rem;color:#64748b">Страниц: {page_count}</div>
+                <div style="font-size:0.85rem;color:#64748b">{type_label} • {size_str}</div>
             </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
     st.info(
-        "🕐 **Быстрый режим** — извлекает текст, заголовки и таблицы из текстового PDF. "
-        "Не подходит для сканированных документов."
+        "🕐 Извлекает текст и структуру из файла и переводит в формат Markdown. "
+        "Не подходит для сканированных PDF."
     )
 
     col_back, col_convert = st.columns([1, 1])
@@ -141,15 +160,15 @@ def _render_step_result() -> None:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _count_pages(file_path: str) -> int | str:
-    try:
-        import fitz
-        doc = fitz.open(file_path)
-        count = doc.page_count
-        doc.close()
-        return count
-    except Exception:
-        return "?"
+def _file_emoji(ext: str) -> str:
+    return {
+        "pdf":  "📄",
+        "docx": "📝",
+        "pptx": "📊",
+        "xlsx": "📊",
+        "csv":  "📃",
+        "json": "📄",
+    }.get(ext, "📄")
 
 
 def _convert(file_path: str) -> tuple[str, str | None]:
@@ -161,7 +180,7 @@ def _convert(file_path: str) -> tuple[str, str | None]:
         if not text or not text.strip():
             return "", (
                 "Файл не содержит извлекаемого текста. "
-                "Возможно, это сканированный PDF — для него нужен OCR-режим."
+                "Проверьте, что файл не пустой и не является сканом."
             )
         return text, None
     except ImportError:
@@ -180,5 +199,5 @@ def _cleanup() -> None:
             os.remove(file_path)
         except OSError:
             pass
-    for key in [_FILE_PATH, _FILE_NAME, _PAGE_COUNT, _MD_RESULT, _STAGE]:
+    for key in [_FILE_PATH, _FILE_NAME, _FILE_SIZE, _MD_RESULT, _STAGE]:
         st.session_state.pop(key, None)
