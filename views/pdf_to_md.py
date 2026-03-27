@@ -22,7 +22,7 @@ _STAGE_RESULT  = "result"
 _FILE_PATH   = "pdf_md_file_path"
 _FILE_NAME   = "pdf_md_file_name"
 _FILE_SIZE   = "pdf_md_file_size"
-_XLSX_ROWS   = "pdf_md_xlsx_rows"   # total row count for xlsx (int | None)
+_XLSX_ROWS   = "pdf_md_xlsx_rows"
 _MD_RESULT   = "pdf_md_result"
 
 _SUPPORTED_TYPES = ["pdf", "docx", "pptx", "xlsx", "csv", "json"]
@@ -36,9 +36,8 @@ _TYPE_LABELS = {
     "json": "JSON файл",
 }
 
-# Thresholds for large-xlsx warning
-_XLSX_SIZE_THRESHOLD  = 30 * 1_048_576   # 30 MB
-_XLSX_ROWS_THRESHOLD  = 500_000
+_XLSX_SIZE_THRESHOLD = 30 * 1_048_576  # 30 MB
+_XLSX_ROWS_THRESHOLD = 500_000
 
 
 def render() -> None:
@@ -81,11 +80,11 @@ def _render_step_upload() -> None:
             if ext == "xlsx":
                 xlsx_rows = _count_xlsx_rows(file_path)
 
-            st.session_state[_FILE_PATH]  = file_path
-            st.session_state[_FILE_NAME]  = uploaded.name
-            st.session_state[_FILE_SIZE]  = len(file_bytes)
-            st.session_state[_XLSX_ROWS]  = xlsx_rows
-            st.session_state[_STAGE]      = _STAGE_CONVERT
+            st.session_state[_FILE_PATH] = file_path
+            st.session_state[_FILE_NAME] = uploaded.name
+            st.session_state[_FILE_SIZE] = len(file_bytes)
+            st.session_state[_XLSX_ROWS] = xlsx_rows
+            st.session_state[_STAGE]     = _STAGE_CONVERT
             st.rerun()
 
 
@@ -106,15 +105,16 @@ def _render_step_convert() -> None:
             <span style="font-size:2rem">{_file_emoji(ext)}</span>
             <div>
                 <div style="font-weight:600;color:#1e293b">{file_name}</div>
-                <div style="font-size:0.85rem;color:#64748b">{type_label} • {size_str}{f" • {xlsx_rows:,} строк" if xlsx_rows else ""}</div>
+                <div style="font-size:0.85rem;color:#64748b">
+                    {type_label} • {size_str}{f" • {xlsx_rows:,} строк" if xlsx_rows else ""}
+                </div>
             </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    # --- Large xlsx warning + row-limit choice ---
-    row_limit: int | None = None  # None = convert all
+    row_limit: int | None = None
     is_large_xlsx = (
         ext == "xlsx"
         and (file_size > _XLSX_SIZE_THRESHOLD or (xlsx_rows and xlsx_rows > _XLSX_ROWS_THRESHOLD))
@@ -230,14 +230,17 @@ def _count_xlsx_rows(file_path: str) -> int | None:
 
 
 def _convert(file_path: str, row_limit: int | None = None) -> tuple[str, str | None]:
-    """Convert file to Markdown.
-
-    For xlsx files with row_limit set, read only N rows per sheet,
-    write to a temp file and convert that instead.
-    """
+    """Convert file to Markdown using markitdown."""
+    # Check markitdown is importable before anything else
     try:
         from markitdown import MarkItDown
+    except ImportError as e:
+        return "", (
+            f"Библиотека markitdown не установлена или нет нужной зависимости: {e}. "
+            "Запустите: pip install \"markitdown[pdf]\""
+        )
 
+    try:
         actual_path = file_path
 
         # If row limit requested for xlsx — write trimmed version to temp file
@@ -256,7 +259,6 @@ def _convert(file_path: str, row_limit: int | None = None) -> tuple[str, str | N
         result = md.convert(actual_path)
         text = result.text_content
 
-        # Cleanup temp file if created
         if actual_path != file_path:
             try:
                 os.remove(actual_path)
@@ -270,11 +272,6 @@ def _convert(file_path: str, row_limit: int | None = None) -> tuple[str, str | N
             )
         return text, None
 
-    except ImportError:
-        return "", (
-            "Библиотека markitdown не установлена. "
-            "Запустите: pip install \"markitdown[pdf]\""
-        )
     except Exception as e:
         return "", f"Ошибка при конвертации: {e}"
 
