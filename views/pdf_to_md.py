@@ -2,6 +2,8 @@
 
 Supported formats: PDF, DOCX, PPTX, XLSX, CSV, JSON.
 Uses markitdown for conversion — works best with text-based files.
+For large xlsx files (>30 MB or >500k rows) the user can choose to
+convert only N rows instead of the full file.
 """
 from __future__ import annotations
 
@@ -17,10 +19,11 @@ _STAGE_UPLOAD  = "upload"
 _STAGE_CONVERT = "convert"
 _STAGE_RESULT  = "result"
 
-_FILE_PATH  = "pdf_md_file_path"
-_FILE_NAME  = "pdf_md_file_name"
-_FILE_SIZE  = "pdf_md_file_size"
-_MD_RESULT  = "pdf_md_result"
+_FILE_PATH   = "pdf_md_file_path"
+_FILE_NAME   = "pdf_md_file_name"
+_FILE_SIZE   = "pdf_md_file_size"
+_XLSX_ROWS   = "pdf_md_xlsx_rows"   # total row count for xlsx (int | None)
+_MD_RESULT   = "pdf_md_result"
 
 _SUPPORTED_TYPES = ["pdf", "docx", "pptx", "xlsx", "csv", "json"]
 
@@ -32,6 +35,10 @@ _TYPE_LABELS = {
     "csv":  "CSV файл",
     "json": "JSON файл",
 }
+
+# Thresholds for large-xlsx warning
+_XLSX_SIZE_THRESHOLD  = 30 * 1_048_576   # 30 MB
+_XLSX_ROWS_THRESHOLD  = 500_000
 
 
 def render() -> None:
@@ -51,7 +58,7 @@ def _render_step_upload() -> None:
     st.caption(
         "Поддерживаемые форматы: "
         + ", ".join(f"**.{t}**" for t in _SUPPORTED_TYPES)
-        + ". Максимальный размер: 300 MB."
+        + ". Максимальный размер: 300 MB."
     )
 
     uploaded = st.file_uploader(
@@ -69,20 +76,27 @@ def _render_step_upload() -> None:
             with open(file_path, "wb") as f:
                 f.write(file_bytes)
 
-            st.session_state[_FILE_PATH] = file_path
-            st.session_state[_FILE_NAME] = uploaded.name
-            st.session_state[_FILE_SIZE] = len(file_bytes)
-            st.session_state[_STAGE]     = _STAGE_CONVERT
+            ext = uploaded.name.rsplit(".", 1)[-1].lower() if "." in uploaded.name else ""
+            xlsx_rows: int | None = None
+            if ext == "xlsx":
+                xlsx_rows = _count_xlsx_rows(file_path)
+
+            st.session_state[_FILE_PATH]  = file_path
+            st.session_state[_FILE_NAME]  = uploaded.name
+            st.session_state[_FILE_SIZE]  = len(file_bytes)
+            st.session_state[_XLSX_ROWS]  = xlsx_rows
+            st.session_state[_STAGE]      = _STAGE_CONVERT
             st.rerun()
 
 
 def _render_step_convert() -> None:
     render_steps(current=2, steps=STEPS_PDF_MD)
-    file_name = st.session_state.get(_FILE_NAME, "файл")
-    file_size = st.session_state.get(_FILE_SIZE, 0)
-    ext       = file_name.rsplit(".", 1)[-1].lower() if "." in file_name else ""
+    file_name  = st.session_state.get(_FILE_NAME, "файл")
+    file_size  = st.session_state.get(_FILE_SIZE, 0)
+    xlsx_rows  = st.session_state.get(_XLSX_ROWS)
+    ext        = file_name.rsplit(".", 1)[-1].lower() if "." in file_name else ""
     type_label = _TYPE_LABELS.get(ext, "Файл")
-    size_str  = f"{file_size / 1_048_576:.2f} MB" if file_size >= 1_048_576 else f"{file_size / 1024:.1f} KB"
+    size_str   = f"{file_size / 1_048_576:.2f} MB" if file_size >= 1_048_576 else f"{file_size / 1024:.1f} KB"
 
     st.subheader("Конвертация")
     st.markdown(
@@ -92,16 +106,47 @@ def _render_step_convert() -> None:
             <span style="font-size:2rem">{_file_emoji(ext)}</span>
             <div>
                 <div style="font-weight:600;color:#1e293b">{file_name}</div>
-                <div style="font-size:0.85rem;color:#64748b">{type_label} • {size_str}</div>
+                <div style="font-size:0.85rem;color:#64748b">{type_label} • {size_str}{f" • {xlsx_rows:,} строк" if xlsx_rows else ""}</div>
             </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
-    st.info(
-        "🕐 Извлекает текст и структуру из файла и переводит в формат Markdown. "
-        "Не подходит для сканированных PDF."
+
+    # --- Large xlsx warning + row-limit choice ---
+    row_limit: int | None = None  # None = convert all
+    is_large_xlsx = (
+        ext == "xlsx"
+        and (file_size > _XLSX_SIZE_THRESHOLD or (xlsx_rows and xlsx_rows > _XLSX_ROWS_THRESHOLD))
     )
+
+    if is_large_xlsx:
+        st.warning(
+            "⚠️ **Большой Excel-файл** — конвертация всего файла может занять **5–15 минут**. "
+            "Вы можете ограничить количество строк для быстрого результата.",
+            icon=None,
+        )
+        limit_mode = st.radio(
+            "Что конвертировать?",
+            options=["Только N строк (быстро)", "Весь файл (долго)"],
+            index=0,
+            horizontal=True,
+            key="xlsx_limit_mode",
+        )
+        if limit_mode == "Только N строк (быстро)":
+            row_limit = st.number_input(
+                "Количество строк",
+                min_value=1,
+                max_value=xlsx_rows or 1_000_000,
+                value=min(10_000, xlsx_rows or 10_000),
+                step=1_000,
+                key="xlsx_row_limit",
+            )
+    else:
+        st.info(
+            "🕐 Извлекает текст и структуру из файла и переводит в формат Markdown. "
+            "Не подходит для сканированных PDF."
+        )
 
     col_back, col_convert = st.columns([1, 1])
     with col_back:
@@ -111,7 +156,10 @@ def _render_step_convert() -> None:
     with col_convert:
         if st.button("Конвертировать", type="primary", use_container_width=True):
             with st.spinner("Конвертируем…"):
-                md_text, error = _convert(st.session_state[_FILE_PATH])
+                md_text, error = _convert(
+                    st.session_state[_FILE_PATH],
+                    row_limit=int(row_limit) if row_limit is not None else None,
+                )
             if error:
                 st.error(error)
             else:
@@ -171,18 +219,57 @@ def _file_emoji(ext: str) -> str:
     }.get(ext, "📄")
 
 
-def _convert(file_path: str) -> tuple[str, str | None]:
+def _count_xlsx_rows(file_path: str) -> int | None:
+    """Count total data rows across all sheets (fast, header excluded)."""
+    try:
+        import pandas as pd
+        sheets = pd.read_excel(file_path, sheet_name=None, engine="calamine", nrows=None)
+        return sum(len(df) for df in sheets.values())
+    except Exception:
+        return None
+
+
+def _convert(file_path: str, row_limit: int | None = None) -> tuple[str, str | None]:
+    """Convert file to Markdown.
+
+    For xlsx files with row_limit set, read only N rows per sheet,
+    write to a temp file and convert that instead.
+    """
     try:
         from markitdown import MarkItDown
+
+        actual_path = file_path
+
+        # If row limit requested for xlsx — write trimmed version to temp file
+        if row_limit is not None and file_path.lower().endswith(".xlsx"):
+            import pandas as pd
+            sheets = pd.read_excel(file_path, sheet_name=None, engine="calamine")
+            trimmed = {name: df.head(row_limit) for name, df in sheets.items()}
+            tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
+            tmp.close()
+            with pd.ExcelWriter(tmp.name, engine="xlsxwriter") as writer:
+                for name, df in trimmed.items():
+                    df.to_excel(writer, sheet_name=name, index=False)
+            actual_path = tmp.name
+
         md = MarkItDown()
-        result = md.convert(file_path)
+        result = md.convert(actual_path)
         text = result.text_content
+
+        # Cleanup temp file if created
+        if actual_path != file_path:
+            try:
+                os.remove(actual_path)
+            except OSError:
+                pass
+
         if not text or not text.strip():
             return "", (
                 "Файл не содержит извлекаемого текста. "
                 "Проверьте, что файл не пустой и не является сканом."
             )
         return text, None
+
     except ImportError:
         return "", (
             "Библиотека markitdown не установлена. "
@@ -199,5 +286,5 @@ def _cleanup() -> None:
             os.remove(file_path)
         except OSError:
             pass
-    for key in [_FILE_PATH, _FILE_NAME, _FILE_SIZE, _MD_RESULT, _STAGE]:
+    for key in [_FILE_PATH, _FILE_NAME, _FILE_SIZE, _XLSX_ROWS, _MD_RESULT, _STAGE]:
         st.session_state.pop(key, None)
