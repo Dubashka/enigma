@@ -220,18 +220,19 @@ def _file_emoji(ext: str) -> str:
 
 
 def _count_xlsx_rows(file_path: str) -> int | None:
-    """Count total data rows across all sheets (fast, header excluded)."""
-    try:
-        import pandas as pd
-        sheets = pd.read_excel(file_path, sheet_name=None, engine="calamine", nrows=None)
-        return sum(len(df) for df in sheets.values())
-    except Exception:
-        return None
+    """Count total data rows across all sheets. Tries calamine first, falls back to openpyxl."""
+    import pandas as pd
+    for engine in ("calamine", "openpyxl"):
+        try:
+            sheets = pd.read_excel(file_path, sheet_name=None, engine=engine)
+            return sum(len(df) for df in sheets.values())
+        except Exception:
+            continue
+    return None
 
 
 def _convert(file_path: str, row_limit: int | None = None) -> tuple[str, str | None]:
     """Convert file to Markdown using markitdown."""
-    # Check markitdown is importable before anything else
     try:
         from markitdown import MarkItDown
     except ImportError as e:
@@ -243,10 +244,18 @@ def _convert(file_path: str, row_limit: int | None = None) -> tuple[str, str | N
     try:
         actual_path = file_path
 
-        # If row limit requested for xlsx — write trimmed version to temp file
         if row_limit is not None and file_path.lower().endswith(".xlsx"):
             import pandas as pd
-            sheets = pd.read_excel(file_path, sheet_name=None, engine="calamine")
+            # try calamine first, fallback to openpyxl
+            sheets = None
+            for engine in ("calamine", "openpyxl"):
+                try:
+                    sheets = pd.read_excel(file_path, sheet_name=None, engine=engine)
+                    break
+                except Exception:
+                    continue
+            if sheets is None:
+                return "", "Не удалось прочитать xlsx-файл."
             trimmed = {name: df.head(row_limit) for name, df in sheets.items()}
             tmp = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False)
             tmp.close()
