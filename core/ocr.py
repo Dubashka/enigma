@@ -8,10 +8,12 @@ Design decisions:
 - Returns (markdown_text, error_message) tuple — no Streamlit dependency
 - File is copied to a safe ASCII-only temp path before conversion
   (docling-parse C++ backend chokes on Cyrillic/spaces in file paths)
+- ConversionError is caught separately to give the user actionable hints
 """
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import tempfile
 
@@ -35,28 +37,32 @@ _TRANSLIT = {
     "Э": "E",  "Ю": "Yu", "Я": "Ya",
 }
 
+_CONVERSION_ERROR_HINT = (
+    "Файл не прошёл валидацию Docling. Возможные причины:\n"
+    "• Файл повреждён или неполностью загрузился\n"
+    "• PDF защищён паролем или запрещает копирование содержимого\n"
+    "• Файл создан нестандартным ПО (старый сканер, конвертер онлайн)\n"
+    "• Файл не является настоящим PDF (например, переименованный JPG)\n\n"
+    "Попробуйте пересохранить PDF через Adobe Acrobat или LibreOffice и загрузить ещё раз."
+)
+
 
 def _safe_filename(name: str) -> str:
     """Transliterate Cyrillic, replace spaces and unsafe chars with underscores."""
     result = "".join(_TRANSLIT.get(ch, ch) for ch in name)
-    # Replace spaces and any char that isn't alphanumeric, dot or dash
-    import re
     result = re.sub(r"[^A-Za-z0-9._-]", "_", result)
-    # Collapse multiple underscores
     result = re.sub(r"_+", "_", result).strip("_")
     return result or "document"
 
 
-def _copy_to_safe_path(file_path: str) -> str:
-    """Copy file to a temp dir under a safe ASCII filename. Returns new path."""
+def _copy_to_safe_path(file_path: str) -> tuple[str, str]:
+    """Copy file to a temp dir under a safe ASCII filename. Returns (new_path, tmp_dir)."""
     original_name = os.path.basename(file_path)
-    ext = original_name.rsplit(".", 1)[-1] if "." in original_name else ""
-    stem = original_name.rsplit(".", 1)[0] if "." in original_name else original_name
+    ext  = original_name.rsplit(".", 1)[-1] if "." in original_name else ""
+    stem = original_name.rsplit(".", 1)[0]  if "." in original_name else original_name
 
-    safe_stem = _safe_filename(stem)
-    safe_name = f"{safe_stem}.{ext}" if ext else safe_stem
-
-    tmp_dir = tempfile.mkdtemp(prefix="enigma_ocr_")
+    safe_name = f"{_safe_filename(stem)}.{ext}" if ext else _safe_filename(stem)
+    tmp_dir   = tempfile.mkdtemp(prefix="enigma_ocr_")
     safe_path = os.path.join(tmp_dir, safe_name)
     shutil.copy2(file_path, safe_path)
     return safe_path, tmp_dir
@@ -76,17 +82,15 @@ def convert_with_docling(file_path: str) -> tuple[str, str | None]:
         from docling.document_converter import DocumentConverter, PdfFormatOption
         from docling.datamodel.pipeline_options import PdfPipelineOptions
         from docling.datamodel.base_models import InputFormat
+        from docling.exceptions import ConversionError
     except ImportError:
         return "", (
             "Библиотека Docling не установлена. "
             "Запустите: pip install docling"
         )
 
-    safe_path = file_path
     tmp_dir = None
     try:
-        # Copy to ASCII-safe path to avoid docling-parse C++ backend bug
-        # with Cyrillic characters and spaces in file names
         safe_path, tmp_dir = _copy_to_safe_path(file_path)
 
         pipeline_options = PdfPipelineOptions(do_ocr=True, do_table_structure=True)
@@ -96,7 +100,7 @@ def convert_with_docling(file_path: str) -> tuple[str, str | None]:
             }
         )
 
-        result = converter.convert(safe_path)
+        result  = converter.convert(safe_path)
         md_text = result.document.export_to_markdown()
 
         if not md_text or not md_text.strip():
@@ -104,10 +108,12 @@ def convert_with_docling(file_path: str) -> tuple[str, str | None]:
 
         return md_text, None
 
+    except ConversionError:
+        return "", _CONVERSION_ERROR_HINT
+
     except Exception as e:
-        return "", f"Ошибка Docling при конвертации: {e}"
+        return "", f"Неожиданная ошибка: {e}"
 
     finally:
-        # Always clean up the temporary safe-path copy
         if tmp_dir and os.path.exists(tmp_dir):
             shutil.rmtree(tmp_dir, ignore_errors=True)
