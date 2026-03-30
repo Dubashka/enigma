@@ -4,5 +4,8 @@ openpyxl==3.1.5
 xlsxwriter==3.2.9
 pytest==8.3.5
 markitdown[pdf]==0.1.1
+<<<<<<< HEAD
 docling==2.31.0
 pikepdf==9.5.0
+=======
+>>>>>>> parent of a0ac638 (Reapply "feat: add Docling OCR engine for scanned PDF/image conversion")
