@@ -27,6 +27,12 @@ def _build_zip(xlsx_bytes: bytes, json_bytes: bytes, base_name: str) -> bytes:
     return buf.getvalue()
 
 
+def _generate_masked_csv(masked_sheets: dict) -> bytes:
+    """Generate CSV bytes from masked sheets (takes first sheet only for CSV input)."""
+    first_df = next(iter(masked_sheets.values()))
+    return first_df.to_csv(index=False).encode("utf-8")
+
+
 def render() -> None:
     st.header("Маскирование данных")
 
@@ -204,6 +210,7 @@ def _render_step_masked() -> None:
     stats = st.session_state[STATS]
     file_name = st.session_state.get(FILE_NAME, "файл")
     format_mode = st.session_state.get(FORMAT_MODE, "raw")
+    is_csv = file_name.lower().endswith(".csv")
 
     st.subheader(f"Результат маскирования: {file_name}")
 
@@ -228,13 +235,23 @@ def _render_step_masked() -> None:
     col1, col2 = st.columns(2)
 
     with col1:
-        st.download_button(
-            label="⬇️ Замаскированный файл (.xlsx)",
-            data=st.session_state[DL_XLSX],
-            file_name=f"{base_name}_masked.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-        )
+        if is_csv:
+            csv_bytes = _generate_masked_csv(masked_sheets)
+            st.download_button(
+                label="⬇️ Замаскированный файл (.csv)",
+                data=csv_bytes,
+                file_name=f"{base_name}_masked.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+        else:
+            st.download_button(
+                label="⬇️ Замаскированный файл (.xlsx)",
+                data=st.session_state[DL_XLSX],
+                file_name=f"{base_name}_masked.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
 
     with col2:
         st.download_button(
