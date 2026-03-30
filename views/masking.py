@@ -1,3 +1,5 @@
+import io
+import zipfile
 import streamlit as st
 from core.output import generate_masked_xlsx, generate_formatted_xlsx, generate_mapping_json, generate_mapping_xlsx
 from core.state_keys import (
@@ -14,6 +16,15 @@ from ui.step_indicator import render_steps
 from ui.column_selector import render_column_selector
 
 import pandas as pd
+
+
+def _build_zip(xlsx_bytes: bytes, json_bytes: bytes, base_name: str) -> bytes:
+    """Pack masked xlsx + mapping json into an in-memory ZIP archive."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(f"{base_name}_masked.xlsx", xlsx_bytes)
+        zf.writestr(f"{base_name}_mapping.json", json_bytes)
+    return buf.getvalue()
 
 
 def render() -> None:
@@ -213,20 +224,22 @@ def _render_step_masked() -> None:
 
     base_name = file_name.rsplit(".", 1)[0] if "." in file_name else file_name
 
-    st.download_button(
-        label="Скачать замаскированный файл",
-        data=st.session_state[DL_XLSX],
-        file_name=f"{base_name}_masked.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
+    # Combined download: masked xlsx + mapping json packed into a single ZIP
+    zip_bytes = _build_zip(
+        xlsx_bytes=st.session_state[DL_XLSX],
+        json_bytes=st.session_state[DL_MAP_JSON],
+        base_name=base_name,
     )
     st.download_button(
-        label="Скачать маппинг (JSON)",
-        data=st.session_state[DL_MAP_JSON],
-        file_name=f"{base_name}_mapping.json",
-        mime="application/json",
+        label="⬇️ Скачать результаты (.zip)",
+        data=zip_bytes,
+        file_name=f"{base_name}_masked_results.zip",
+        mime="application/zip",
         use_container_width=True,
+        type="primary",
     )
+    st.caption("Архив содержит замаскированный файл и маппинг (JSON)")
+
     st.download_button(
         label="Скачать маппинг (Excel)",
         data=st.session_state[DL_MAP_XLSX],
