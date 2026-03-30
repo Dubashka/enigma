@@ -139,11 +139,6 @@ def _render_step_convert() -> None:
                 "⏰ OCR обрабатывает каждую страницу отдельно — это может занять "
                 "несколько минут для многостраничных документов."
             )
-        #else:
-           # st.info(
-            #    "⏰ Извлекает текст и структуру из файла и переводит в формат Markdown. "
-           #     "Не подходит для сканированных PDF — включите чекбокс выше."
-         #   )
 
     col_back, col_convert = st.columns([1, 1])
     with col_back:
@@ -171,7 +166,6 @@ def _render_step_convert() -> None:
                 if error:
                     st.error(error)
                 elif _is_scanned(md_text):
-                    # Auto-detect: markitdown returned nothing — prompt user
                     st.warning(
                         "⚠️ Не удалось извлечь текст из PDF. "
                         "Похоже, это сканированный документ. "
@@ -233,8 +227,8 @@ def _render_md_result(base: str) -> None:
 
 
 def _render_ocr_result(base: str) -> None:
-    """Result section for OCR path — three download formats."""
-    from core.output import generate_ocr_txt, generate_ocr_md, generate_ocr_json
+    """Result section for OCR path — two download formats: .md and .txt."""
+    from core.output import generate_ocr_md, generate_ocr_txt
 
     pages = st.session_state[_OCR_PAGES]
     total_chars = sum(len(p["text"]) for p in pages)
@@ -245,7 +239,6 @@ def _render_ocr_result(base: str) -> None:
     col2.metric("Символов", f"{total_chars:,}")
     col3.metric("Слов",     f"{total_words:,}")
 
-    # Preview first page
     st.markdown("**Превью — страница 1**")
     preview = pages[0]["text"] if pages else ""
     st.code(
@@ -254,16 +247,8 @@ def _render_ocr_result(base: str) -> None:
     )
 
     st.markdown("**Скачать результат**")
-    dl1, dl2, dl3 = st.columns(3)
+    dl1, dl2 = st.columns(2)
     with dl1:
-        st.download_button(
-            label="⬇️ Скачать .txt",
-            data=generate_ocr_txt(pages),
-            file_name=f"{base}_ocr.txt",
-            mime="text/plain",
-            use_container_width=True,
-        )
-    with dl2:
         st.download_button(
             label="⬇️ Скачать .md",
             data=generate_ocr_md(pages),
@@ -271,12 +256,12 @@ def _render_ocr_result(base: str) -> None:
             mime="text/markdown",
             use_container_width=True,
         )
-    with dl3:
+    with dl2:
         st.download_button(
-            label="⬇️ Скачать .json",
-            data=generate_ocr_json(pages),
-            file_name=f"{base}_ocr.json",
-            mime="application/json",
+            label="⬇️ Скачать .txt",
+            data=generate_ocr_txt(pages),
+            file_name=f"{base}_ocr.txt",
+            mime="text/plain",
             use_container_width=True,
         )
 
@@ -314,7 +299,7 @@ def _convert_markitdown(file_path: str) -> tuple[str, str | None]:
     except ImportError:
         return "", (
             "Библиотека markitdown не установлена. "
-            'Запустите: pip install "markitdown[pdf]"'
+            'pip install "markitdown[pdf]"'
         )
     except Exception as e:
         return "", f"Ошибка при конвертации: {e}"
