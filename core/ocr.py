@@ -10,6 +10,7 @@ Design decisions:
   (docling-parse C++ backend chokes on Cyrillic/spaces in file paths)
 - ConversionError triggers a pikepdf repair pass, then retries Docling once
 - If repair also fails, a user-friendly hint is shown
+- OCR language(s) are passed via OcrOptions to improve recognition quality
 """
 from __future__ import annotations
 
@@ -19,6 +20,20 @@ import shutil
 import tempfile
 
 SUPPORTED_OCR_TYPES = ["pdf", "png", "jpg", "jpeg", "tiff", "bmp", "webp"]
+
+# Human-readable language labels → Docling/EasyOCR language codes
+OCR_LANGUAGES: dict[str, str] = {
+    "Русский":     "ru",
+    "Английский":  "en",
+    "Немецкий":   "de",
+    "Французский": "fr",
+    "Испанский":  "es",
+    "Итальянский": "it",
+    "Китайский (упр.)": "ch_sim",
+    "Японский":  "ja",
+}
+
+DEFAULT_LANGUAGES = ["Русский", "Английский"]
 
 # Cyrillic → Latin transliteration table
 _TRANSLIT = {
@@ -48,7 +63,6 @@ _CONVERSION_ERROR_HINT = (
 
 
 def _safe_filename(name: str) -> str:
-    """Transliterate Cyrillic, replace spaces and unsafe chars with underscores."""
     result = "".join(_TRANSLIT.get(ch, ch) for ch in name)
     result = re.sub(r"[^A-Za-z0-9._-]", "_", result)
     result = re.sub(r"_+", "_", result).strip("_")
@@ -56,11 +70,9 @@ def _safe_filename(name: str) -> str:
 
 
 def _copy_to_safe_path(file_path: str) -> tuple[str, str]:
-    """Copy file to a temp dir under a safe ASCII filename. Returns (new_path, tmp_dir)."""
     original_name = os.path.basename(file_path)
     ext  = original_name.rsplit(".", 1)[-1] if "." in original_name else ""
     stem = original_name.rsplit(".", 1)[0]  if "." in original_name else original_name
-
     safe_name = f"{_safe_filename(stem)}.{ext}" if ext else _safe_filename(stem)
     tmp_dir   = tempfile.mkdtemp(prefix="enigma_ocr_")
     safe_path = os.path.join(tmp_dir, safe_name)
@@ -69,12 +81,6 @@ def _copy_to_safe_path(file_path: str) -> tuple[str, str]:
 
 
 def _repair_pdf(src_path: str, tmp_dir: str) -> str | None:
-    """Try to repair a broken PDF with pikepdf. Returns path to repaired file or None.
-
-    pikepdf opens the file with QPDF (C++ library) which tolerates many structural
-    errors and re-serialises a clean, spec-compliant PDF on save.
-    Encrypted PDFs without a password will raise PasswordError — caught here.
-    """
     try:
         import pikepdf
         repaired_path = os.path.join(tmp_dir, "repaired.pdf")
@@ -85,13 +91,18 @@ def _repair_pdf(src_path: str, tmp_dir: str) -> str | None:
         return None
 
 
-def _run_docling(safe_path: str) -> str:
-    """Run Docling converter and return markdown text. Raises on any error."""
+def _run_docling(safe_path: str, lang_codes: list[str]) -> str:
+    """Run Docling converter with given language codes. Raises on any error."""
     from docling.document_converter import DocumentConverter, PdfFormatOption
-    from docling.datamodel.pipeline_options import PdfPipelineOptions
+    from docling.datamodel.pipeline_options import PdfPipelineOptions, EasyOcrOptions
     from docling.datamodel.base_models import InputFormat
 
-    pipeline_options = PdfPipelineOptions(do_ocr=True, do_table_structure=True)
+    ocr_options = EasyOcrOptions(lang=lang_codes)
+    pipeline_options = PdfPipelineOptions(
+        do_ocr=True,
+        do_table_structure=True,
+        ocr_options=ocr_options,
+    )
     converter = DocumentConverter(
         format_options={
             InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
@@ -101,17 +112,16 @@ def _run_docling(safe_path: str) -> str:
     return result.document.export_to_markdown()
 
 
-def convert_with_docling(file_path: str) -> tuple[str, str | None]:
+def convert_with_docling(
+    file_path: str,
+    languages: list[str] | None = None,
+) -> tuple[str, str | None]:
     """Convert a scanned file to Markdown using Docling OCR.
-
-    Flow:
-        1. Copy to ASCII-safe temp path
-        2. Try Docling directly
-        3. On ConversionError → attempt pikepdf repair → retry Docling
-        4. If still failing → show user-friendly hint
 
     Args:
         file_path: Absolute path to the file on disk.
+        languages: List of human-readable language names from OCR_LANGUAGES.
+                   Defaults to DEFAULT_LANGUAGES (['Русский', 'Английский']).
 
     Returns:
         (markdown_text, None) on success.
@@ -125,25 +135,31 @@ def convert_with_docling(file_path: str) -> tuple[str, str | None]:
             "Запустите: pip install docling"
         )
 
+    selected = languages or DEFAULT_LANGUAGES
+    lang_codes = [OCR_LANGUAGES[lang] for lang in selected if lang in OCR_LANGUAGES]
+    if not lang_codes:
+        lang_codes = ["ru", "en"]
+
     tmp_dir = None
     try:
         safe_path, tmp_dir = _copy_to_safe_path(file_path)
 
-        # --- First attempt: convert as-is ---
         try:
-            md_text = _run_docling(safe_path)
+            md_text = _run_docling(safe_path, lang_codes)
         except ConversionError:
-            # --- Fallback: repair with pikepdf, then retry ---
             repaired_path = _repair_pdf(safe_path, tmp_dir)
             if repaired_path is None:
                 return "", _CONVERSION_ERROR_HINT
             try:
-                md_text = _run_docling(repaired_path)
+                md_text = _run_docling(repaired_path, lang_codes)
             except ConversionError:
                 return "", _CONVERSION_ERROR_HINT
 
         if not md_text or not md_text.strip():
-            return "", "Текст не обнаружен. Проверьте качество скана или читаемость PDF."
+            return "", (
+                "Текст не обнаружен. Проверьте качество скана или читаемость PDF. "
+                "Также убедитесь, что выбраны правильные языки документа."
+            )
 
         return md_text, None
 
