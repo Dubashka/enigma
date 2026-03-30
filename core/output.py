@@ -33,6 +33,18 @@ def generate_masked_xlsx(masked_sheets: dict[str, pd.DataFrame]) -> bytes:
     return buf.read()
 
 
+def generate_masked_csv(masked_sheets: dict[str, pd.DataFrame]) -> bytes:
+    """Serialize the first (and typically only) sheet to CSV bytes (UTF-8 with BOM).
+
+    UTF-8 BOM ensures correct encoding detection when opening in Excel on Windows.
+    If the input had multiple sheets, only the first is exported (CSV is single-table).
+    """
+    df = next(iter(masked_sheets.values()))
+    buf = io.StringIO()
+    df.to_csv(buf, index=False, encoding="utf-8")
+    return buf.getvalue().encode("utf-8-sig")
+
+
 def generate_formatted_xlsx(
     source_path: str,
     masked_sheets: dict[str, pd.DataFrame],
