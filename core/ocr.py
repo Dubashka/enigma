@@ -8,7 +8,8 @@ Design decisions:
 - Returns (markdown_text, error_message) tuple — no Streamlit dependency
 - File is copied to a safe ASCII-only temp path before conversion
   (docling-parse C++ backend chokes on Cyrillic/spaces in file paths)
-- ConversionError is caught separately to give the user actionable hints
+- ConversionError triggers a pikepdf repair pass, then retries Docling once
+- If repair also fails, a user-friendly hint is shown
 """
 from __future__ import annotations
 
@@ -38,10 +39,9 @@ _TRANSLIT = {
 }
 
 _CONVERSION_ERROR_HINT = (
-    "Файл не прошёл валидацию Docling. Возможные причины:\n"
-    "• Файл повреждён или неполностью загрузился\n"
+    "Файл не прошёл валидацию даже после попытки автоматического восстановления. Возможные причины:\n"
     "• PDF защищён паролем или запрещает копирование содержимого\n"
-    "• Файл создан нестандартным ПО (старый сканер, конвертер онлайн)\n"
+    "• Файл слишком сильно повреждён и не поддаётся восстановлению\n"
     "• Файл не является настоящим PDF (например, переименованный JPG)\n\n"
     "Попробуйте пересохранить PDF через Adobe Acrobat или LibreOffice и загрузить ещё раз."
 )
@@ -68,8 +68,47 @@ def _copy_to_safe_path(file_path: str) -> tuple[str, str]:
     return safe_path, tmp_dir
 
 
+def _repair_pdf(src_path: str, tmp_dir: str) -> str | None:
+    """Try to repair a broken PDF with pikepdf. Returns path to repaired file or None.
+
+    pikepdf opens the file with QPDF (C++ library) which tolerates many structural
+    errors and re-serialises a clean, spec-compliant PDF on save.
+    Encrypted PDFs without a password will raise PasswordError — caught here.
+    """
+    try:
+        import pikepdf
+        repaired_path = os.path.join(tmp_dir, "repaired.pdf")
+        with pikepdf.open(src_path, suppress_warnings=True) as pdf:
+            pdf.save(repaired_path)
+        return repaired_path
+    except Exception:
+        return None
+
+
+def _run_docling(safe_path: str) -> str:
+    """Run Docling converter and return markdown text. Raises on any error."""
+    from docling.document_converter import DocumentConverter, PdfFormatOption
+    from docling.datamodel.pipeline_options import PdfPipelineOptions
+    from docling.datamodel.base_models import InputFormat
+
+    pipeline_options = PdfPipelineOptions(do_ocr=True, do_table_structure=True)
+    converter = DocumentConverter(
+        format_options={
+            InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+        }
+    )
+    result = converter.convert(safe_path)
+    return result.document.export_to_markdown()
+
+
 def convert_with_docling(file_path: str) -> tuple[str, str | None]:
     """Convert a scanned file to Markdown using Docling OCR.
+
+    Flow:
+        1. Copy to ASCII-safe temp path
+        2. Try Docling directly
+        3. On ConversionError → attempt pikepdf repair → retry Docling
+        4. If still failing → show user-friendly hint
 
     Args:
         file_path: Absolute path to the file on disk.
@@ -79,9 +118,6 @@ def convert_with_docling(file_path: str) -> tuple[str, str | None]:
         ("", error_message) on failure.
     """
     try:
-        from docling.document_converter import DocumentConverter, PdfFormatOption
-        from docling.datamodel.pipeline_options import PdfPipelineOptions
-        from docling.datamodel.base_models import InputFormat
         from docling.exceptions import ConversionError
     except ImportError:
         return "", (
@@ -93,23 +129,23 @@ def convert_with_docling(file_path: str) -> tuple[str, str | None]:
     try:
         safe_path, tmp_dir = _copy_to_safe_path(file_path)
 
-        pipeline_options = PdfPipelineOptions(do_ocr=True, do_table_structure=True)
-        converter = DocumentConverter(
-            format_options={
-                InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
-            }
-        )
-
-        result  = converter.convert(safe_path)
-        md_text = result.document.export_to_markdown()
+        # --- First attempt: convert as-is ---
+        try:
+            md_text = _run_docling(safe_path)
+        except ConversionError:
+            # --- Fallback: repair with pikepdf, then retry ---
+            repaired_path = _repair_pdf(safe_path, tmp_dir)
+            if repaired_path is None:
+                return "", _CONVERSION_ERROR_HINT
+            try:
+                md_text = _run_docling(repaired_path)
+            except ConversionError:
+                return "", _CONVERSION_ERROR_HINT
 
         if not md_text or not md_text.strip():
             return "", "Текст не обнаружен. Проверьте качество скана или читаемость PDF."
 
         return md_text, None
-
-    except ConversionError:
-        return "", _CONVERSION_ERROR_HINT
 
     except Exception as e:
         return "", f"Неожиданная ошибка: {e}"

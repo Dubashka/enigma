@@ -5,3 +5,4 @@ xlsxwriter==3.2.9
 pytest==8.3.5
 markitdown[pdf]==0.1.1
 docling==2.31.0
+pikepdf==9.5.0
