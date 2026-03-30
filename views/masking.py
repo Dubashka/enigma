@@ -224,33 +224,29 @@ def _render_step_masked() -> None:
 
     base_name = file_name.rsplit(".", 1)[0] if "." in file_name else file_name
 
-    # Grouped download block
-    st.markdown("**Скачать результаты**")
-    dl_col1, dl_col2 = st.columns([1, 1])
-
+    # Combined download: masked xlsx + mapping json packed into a single ZIP
     zip_bytes = _build_zip(
         xlsx_bytes=st.session_state[DL_XLSX],
         json_bytes=st.session_state[DL_MAP_JSON],
         base_name=base_name,
     )
-    with dl_col1:
-        st.download_button(
-            label="⬇️ Результаты (.zip)",
-            data=zip_bytes,
-            file_name=f"{base_name}_masked_results.zip",
-            mime="application/zip",
-            use_container_width=True,
-            type="primary",
-            help="Архив содержит замаскированный файл и маппинг (JSON)",
-        )
-    with dl_col2:
-        st.download_button(
-            label="Маппинг (Excel)",
-            data=st.session_state[DL_MAP_XLSX],
-            file_name=f"{base_name}_mapping.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-        )
+    st.download_button(
+        label="⬇️ Скачать результаты (.zip)",
+        data=zip_bytes,
+        file_name=f"{base_name}_masked_results.zip",
+        mime="application/zip",
+        use_container_width=True,
+        type="primary",
+    )
+    st.caption("Архив содержит замаскированный файл и маппинг (JSON)")
+
+    st.download_button(
+        label="Скачать маппинг (Excel)",
+        data=st.session_state[DL_MAP_XLSX],
+        file_name=f"{base_name}_mapping.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+    )
 
     col_back, col_reset = st.columns([1, 1])
     with col_back:
