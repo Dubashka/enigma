@@ -10,10 +10,8 @@ Design decisions:
 - lang defaults to "rus+eng" — covers the most common mixed-language documents.
 - Returns structured list so callers can choose output format freely
   (plain text, Markdown, JSON — see core/output.py).
-- Raises ImportError with a clear message when optional deps are missing,
-  so the UI layer (views/pdf_to_md.py) can show a helpful hint.
-- On Windows, tesseract_cmd is set automatically to the default install path.
-  Override via TESSERACT_CMD env variable if installed elsewhere.
+- On Windows, tesseract_cmd and poppler_path are set automatically.
+  Override via TESSERACT_CMD / POPPLER_PATH env variables if installed elsewhere.
 """
 from __future__ import annotations
 
@@ -21,13 +19,28 @@ import os
 import platform
 
 
+# ---------------------------------------------------------------------------
+# Windows path candidates
+# ---------------------------------------------------------------------------
+
+_TESSERACT_CANDIDATES = [
+    r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+    r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+]
+
+_POPPLER_CANDIDATES = [
+    r"C:\poppler\poppler-25.12.0\Library\bin",
+    r"C:\poppler\Library\bin",
+]
+
+
 def _configure_tesseract() -> None:
-    """Set pytesseract.tesseract_cmd on Windows if not already overridden.
+    """Set pytesseract.tesseract_cmd on Windows.
 
     Resolution order:
-    1. TESSERACT_CMD environment variable (user override, any platform)
-    2. Default Windows install path: C:\\Program Files\\Tesseract-OCR\\tesseract.exe
-    3. Assume tesseract is in PATH (Linux / macOS default)
+    1. TESSERACT_CMD environment variable
+    2. Known Windows install paths (tries each until found)
+    3. Assume tesseract is in PATH (Linux / macOS)
     """
     import pytesseract
 
@@ -37,9 +50,30 @@ def _configure_tesseract() -> None:
         return
 
     if platform.system() == "Windows":
-        default_path = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-        if os.path.isfile(default_path):
-            pytesseract.pytesseract.tesseract_cmd = default_path
+        for candidate in _TESSERACT_CANDIDATES:
+            if os.path.isfile(candidate):
+                pytesseract.pytesseract.tesseract_cmd = candidate
+                return
+
+
+def _get_poppler_path() -> str | None:
+    """Return poppler bin path on Windows, or None on Linux/macOS.
+
+    Resolution order:
+    1. POPPLER_PATH environment variable
+    2. Known Windows install paths (tries each until found)
+    3. None — assume poppler is in system PATH
+    """
+    env_path = os.environ.get("POPPLER_PATH")
+    if env_path:
+        return env_path
+
+    if platform.system() == "Windows":
+        for candidate in _POPPLER_CANDIDATES:
+            if os.path.isdir(candidate):
+                return candidate
+
+    return None
 
 
 def _check_deps() -> None:
@@ -77,7 +111,7 @@ def ocr_pdf(
 
     Raises:
         ImportError: if pdf2image or pytesseract is not installed.
-        RuntimeError: if Tesseract binary is not found in PATH.
+        RuntimeError: if Tesseract binary is not found.
         Exception:   propagates pdf2image / Tesseract errors as-is.
     """
     _check_deps()
@@ -99,7 +133,8 @@ def ocr_pdf(
             "Или задайте переменную окружения TESSERACT_CMD с полным путём к tesseract.exe"
         )
 
-    images = convert_from_path(file_path, dpi=dpi)
+    poppler_path = _get_poppler_path()
+    images = convert_from_path(file_path, dpi=dpi, poppler_path=poppler_path)
 
     pages: list[dict] = []
     for i, img in enumerate(images, start=1):
