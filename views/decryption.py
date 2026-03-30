@@ -2,7 +2,7 @@ import streamlit as st
 
 from core.parser import parse_upload, save_upload, cleanup_upload
 from core.decryptor import load_mapping_json, decrypt_sheets
-from core.output import generate_masked_xlsx, generate_formatted_xlsx
+from core.output import generate_masked_xlsx, generate_masked_csv, generate_formatted_xlsx
 from core.state_keys import DECR_SHEETS, DECR_MAPPING, DECR_RESULT, DECR_FILE_PATH, FORMAT_MODE
 from ui.upload_widget import render_preview
 from ui.step_indicator import render_steps, STEPS_DECRYPTION
@@ -80,7 +80,7 @@ def _render_step_decrypt() -> None:
     st.caption("Показаны первые 20 строк каждого листа")
     render_preview(sheets)
 
-    # Format mode selector
+    # Format mode selector (only for xlsx input)
     if is_xlsx:
         st.divider()
         st.markdown("**Формат выходного файла**")
@@ -101,6 +101,7 @@ def _render_step_decrypt() -> None:
         else:
             st.caption("Выходной файл будет содержать только данные без стилей.")
     else:
+        # CSV input — no formatting options applicable
         st.session_state[FORMAT_MODE] = "raw"
 
     col_back, col_decrypt = st.columns([1, 1])
@@ -124,9 +125,13 @@ def _render_step_result() -> None:
     format_mode = st.session_state.get(FORMAT_MODE, "raw")
     file_path = st.session_state.get(DECR_FILE_PATH)
 
+    is_csv = file_name.lower().endswith(".csv")
+
     st.subheader(f"Результат дешифровки: {file_name}")
 
-    if format_mode == "formatted":
+    if is_csv:
+        st.caption("📄 CSV-файл")
+    elif format_mode == "formatted":
         st.caption("✅ Форматирование оригинала сохранено")
     else:
         st.caption("📄 Без форматирования")
@@ -134,18 +139,25 @@ def _render_step_result() -> None:
     render_preview(result)
 
     base = file_name.rsplit(".", 1)[0] if "." in file_name else file_name
-    decr_file_name = f"{base}_decrypted.xlsx"
 
-    if format_mode == "formatted" and file_path and file_path.lower().endswith(".xlsx"):
+    if is_csv:
+        decr_file_name = f"{base}_decrypted.csv"
+        output_bytes = generate_masked_csv(result)
+        mime = "text/csv"
+    elif format_mode == "formatted" and file_path and file_path.lower().endswith(".xlsx"):
+        decr_file_name = f"{base}_decrypted.xlsx"
         output_bytes = generate_formatted_xlsx(file_path, result)
+        mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     else:
+        decr_file_name = f"{base}_decrypted.xlsx"
         output_bytes = generate_masked_xlsx(result)
+        mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
     st.download_button(
         label="Скачать восстановленный файл",
         data=output_bytes,
         file_name=decr_file_name,
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        mime=mime,
         use_container_width=True,
     )
 
