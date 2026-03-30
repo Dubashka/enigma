@@ -12,8 +12,34 @@ Design decisions:
   (plain text, Markdown, JSON — see core/output.py).
 - Raises ImportError with a clear message when optional deps are missing,
   so the UI layer (views/pdf_to_md.py) can show a helpful hint.
+- On Windows, tesseract_cmd is set automatically to the default install path.
+  Override via TESSERACT_CMD env variable if installed elsewhere.
 """
 from __future__ import annotations
+
+import os
+import platform
+
+
+def _configure_tesseract() -> None:
+    """Set pytesseract.tesseract_cmd on Windows if not already overridden.
+
+    Resolution order:
+    1. TESSERACT_CMD environment variable (user override, any platform)
+    2. Default Windows install path: C:\\Program Files\\Tesseract-OCR\\tesseract.exe
+    3. Assume tesseract is in PATH (Linux / macOS default)
+    """
+    import pytesseract
+
+    env_path = os.environ.get("TESSERACT_CMD")
+    if env_path:
+        pytesseract.pytesseract.tesseract_cmd = env_path
+        return
+
+    if platform.system() == "Windows":
+        default_path = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+        if os.path.isfile(default_path):
+            pytesseract.pytesseract.tesseract_cmd = default_path
 
 
 def _check_deps() -> None:
@@ -59,14 +85,18 @@ def ocr_pdf(
     from pdf2image import convert_from_path
     import pytesseract
 
+    _configure_tesseract()
+
     # Verify Tesseract is accessible before starting the (potentially long) conversion
     try:
         pytesseract.get_tesseract_version()
     except pytesseract.TesseractNotFoundError:
         raise RuntimeError(
             "Tesseract не найден. Убедитесь, что он установлен и доступен в PATH. "
+            "Windows: C:\\Program Files\\Tesseract-OCR\\tesseract.exe  "
             "Linux: sudo apt install tesseract-ocr tesseract-ocr-rus  "
-            "macOS: brew install tesseract tesseract-lang"
+            "macOS: brew install tesseract tesseract-lang  "
+            "Или задайте переменную окружения TESSERACT_CMD с полным путём к tesseract.exe"
         )
 
     images = convert_from_path(file_path, dpi=dpi)
