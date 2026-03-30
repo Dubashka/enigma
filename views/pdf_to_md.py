@@ -1,7 +1,14 @@
-"""File → Markdown conversion view (3-step flow).
+"""File → Markdown / OCR conversion view (3-step flow).
 
 Supported formats: PDF, DOCX, PPTX, XLSX, CSV, JSON.
-Uses markitdown for conversion — works best with text-based files.
+
+Two conversion paths for PDF:
+- Text-based PDF  → markitdown (fast, preserves structure)
+- Scanned PDF     → Tesseract OCR via core.ocr (pdf2image + pytesseract)
+
+The path is chosen automatically: if markitdown returns < 50 non-whitespace
+chars the file is treated as a scan and the OCR branch is activated.
+The user can also force OCR manually via a checkbox on the convert step.
 """
 from __future__ import annotations
 
@@ -17,10 +24,12 @@ _STAGE_UPLOAD  = "upload"
 _STAGE_CONVERT = "convert"
 _STAGE_RESULT  = "result"
 
-_FILE_PATH  = "pdf_md_file_path"
-_FILE_NAME  = "pdf_md_file_name"
-_FILE_SIZE  = "pdf_md_file_size"
-_MD_RESULT  = "pdf_md_result"
+_FILE_PATH    = "pdf_md_file_path"
+_FILE_NAME    = "pdf_md_file_name"
+_FILE_SIZE    = "pdf_md_file_size"
+_MD_RESULT    = "pdf_md_result"      # str  — markitdown path
+_OCR_PAGES    = "pdf_md_ocr_pages"   # list[dict] — OCR path
+_IS_OCR       = "pdf_md_is_ocr"      # bool
 
 _SUPPORTED_TYPES = ["pdf", "docx", "pptx", "xlsx", "csv", "json"]
 
@@ -31,6 +40,12 @@ _TYPE_LABELS = {
     "xlsx": "Excel таблица",
     "csv":  "CSV файл",
     "json": "JSON файл",
+}
+
+_LANG_OPTIONS = {
+    "Русский + Английский": "rus+eng",
+    "Только русский":       "rus",
+    "Только английский":    "eng",
 }
 
 
@@ -51,7 +66,7 @@ def _render_step_upload() -> None:
     st.caption(
         "Поддерживаемые форматы: "
         + ", ".join(f"**.{t}**" for t in _SUPPORTED_TYPES)
-        + ". Максимальный размер: 300 MB."
+        + ". Максимальный размер: 300 MB."
     )
 
     uploaded = st.file_uploader(
@@ -78,11 +93,12 @@ def _render_step_upload() -> None:
 
 def _render_step_convert() -> None:
     render_steps(current=2, steps=STEPS_PDF_MD)
-    file_name = st.session_state.get(_FILE_NAME, "файл")
-    file_size = st.session_state.get(_FILE_SIZE, 0)
-    ext       = file_name.rsplit(".", 1)[-1].lower() if "." in file_name else ""
+    file_name  = st.session_state.get(_FILE_NAME, "файл")
+    file_size  = st.session_state.get(_FILE_SIZE, 0)
+    ext        = file_name.rsplit(".", 1)[-1].lower() if "." in file_name else ""
     type_label = _TYPE_LABELS.get(ext, "Файл")
-    size_str  = f"{file_size / 1_048_576:.2f} MB" if file_size >= 1_048_576 else f"{file_size / 1024:.1f} KB"
+    size_str   = f"{file_size / 1_048_576:.2f} MB" if file_size >= 1_048_576 else f"{file_size / 1024:.1f} KB"
+    is_pdf     = ext == "pdf"
 
     st.subheader("Конвертация")
     st.markdown(
@@ -98,10 +114,36 @@ def _render_step_convert() -> None:
         """,
         unsafe_allow_html=True,
     )
-    st.info(
-        "🕐 Извлекает текст и структуру из файла и переводит в формат Markdown. "
-        "Не подходит для сканированных PDF."
-    )
+
+    # OCR options — shown only for PDF files
+    force_ocr = False
+    ocr_lang  = "rus+eng"
+    if is_pdf:
+        force_ocr = st.checkbox(
+            "📖 Это сканированный PDF (использовать OCR)",
+            value=False,
+            help=(
+                "Включите, если PDF состоит из отсканированных страниц "
+                "и не содержит выделяемого текста. "
+                "Требует установленного Tesseract."
+            ),
+        )
+        if force_ocr:
+            lang_label = st.selectbox(
+                "Язык распознавания",
+                options=list(_LANG_OPTIONS.keys()),
+                index=0,
+            )
+            ocr_lang = _LANG_OPTIONS[lang_label]
+            st.info(
+                "⏰ OCR обрабатывает каждую страницу отдельно — это может занять "
+                "несколько минут для многостраничных документов."
+            )
+        else:
+            st.info(
+                "⏰ Извлекает текст и структуру из файла и переводит в формат Markdown. "
+                "Не подходит для сканированных PDF — включите чекбокс выше."
+            )
 
     col_back, col_convert = st.columns([1, 1])
     with col_back:
@@ -110,23 +152,68 @@ def _render_step_convert() -> None:
             st.rerun()
     with col_convert:
         if st.button("Конвертировать", type="primary", use_container_width=True):
-            with st.spinner("Конвертируем…"):
-                md_text, error = _convert(st.session_state[_FILE_PATH])
-            if error:
-                st.error(error)
+            file_path = st.session_state[_FILE_PATH]
+            if is_pdf and force_ocr:
+                # --- OCR branch ---
+                with st.spinner("Распознаём текст через Tesseract…"):
+                    pages, error = _run_ocr(file_path, lang=ocr_lang)
+                if error:
+                    st.error(error)
+                else:
+                    st.session_state[_OCR_PAGES] = pages
+                    st.session_state[_IS_OCR]    = True
+                    st.session_state[_STAGE]     = _STAGE_RESULT
+                    st.rerun()
             else:
-                st.session_state[_MD_RESULT] = md_text
-                st.session_state[_STAGE]     = _STAGE_RESULT
-                st.rerun()
+                # --- markitdown branch ---
+                with st.spinner("Конвертируем…"):
+                    md_text, error = _convert_markitdown(file_path)
+                if error:
+                    st.error(error)
+                elif _is_scanned(md_text):
+                    # Auto-detect: markitdown returned nothing — prompt user
+                    st.warning(
+                        "⚠️ Не удалось извлечь текст из PDF. "
+                        "Похоже, это сканированный документ. "
+                        "Включите чекбокс **\"Это сканированный PDF\"** и попробуйте снова."
+                    )
+                else:
+                    st.session_state[_MD_RESULT] = md_text
+                    st.session_state[_IS_OCR]    = False
+                    st.session_state[_STAGE]     = _STAGE_RESULT
+                    st.rerun()
 
 
 def _render_step_result() -> None:
     render_steps(current=3, steps=STEPS_PDF_MD)
-    md_text   = st.session_state[_MD_RESULT]
+    is_ocr    = st.session_state.get(_IS_OCR, False)
     file_name = st.session_state.get(_FILE_NAME, "файл")
     base      = file_name.rsplit(".", 1)[0] if "." in file_name else file_name
 
     st.subheader("Результат конвертации")
+
+    if is_ocr:
+        _render_ocr_result(base)
+    else:
+        _render_md_result(base)
+
+    col_back, col_reset = st.columns([1, 1])
+    with col_back:
+        if st.button("Назад к конвертации", use_container_width=True):
+            st.session_state.pop(_MD_RESULT, None)
+            st.session_state.pop(_OCR_PAGES, None)
+            st.session_state.pop(_IS_OCR, None)
+            st.session_state[_STAGE] = _STAGE_CONVERT
+            st.rerun()
+    with col_reset:
+        if st.button("Сбросить", use_container_width=True):
+            _cleanup()
+            st.rerun()
+
+
+def _render_md_result(base: str) -> None:
+    """Result section for markitdown path."""
+    md_text = st.session_state[_MD_RESULT]
 
     col1, col2, col3 = st.columns(3)
     col1.metric("Строк",    f"{len(md_text.splitlines()):,}")
@@ -137,23 +224,61 @@ def _render_step_result() -> None:
     st.code(md_text[:1000] + ("…" if len(md_text) > 1000 else ""), language="markdown")
 
     st.download_button(
-        label="Скачать .md файл",
+        label="⬇️ Скачать .md файл",
         data=md_text.encode("utf-8"),
         file_name=f"{base}.md",
         mime="text/markdown",
         use_container_width=True,
     )
 
-    col_back, col_reset = st.columns([1, 1])
-    with col_back:
-        if st.button("Назад к конвертации", use_container_width=True):
-            st.session_state.pop(_MD_RESULT, None)
-            st.session_state[_STAGE] = _STAGE_CONVERT
-            st.rerun()
-    with col_reset:
-        if st.button("Сбросить", use_container_width=True):
-            _cleanup()
-            st.rerun()
+
+def _render_ocr_result(base: str) -> None:
+    """Result section for OCR path — three download formats."""
+    from core.output import generate_ocr_txt, generate_ocr_md, generate_ocr_json
+
+    pages = st.session_state[_OCR_PAGES]
+    total_chars = sum(len(p["text"]) for p in pages)
+    total_words = sum(len(p["text"].split()) for p in pages)
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Страниц",  str(len(pages)))
+    col2.metric("Символов", f"{total_chars:,}")
+    col3.metric("Слов",     f"{total_words:,}")
+
+    # Preview first page
+    st.markdown("**Превью — страница 1**")
+    preview = pages[0]["text"] if pages else ""
+    st.code(
+        preview[:1000] + ("…" if len(preview) > 1000 else ""),
+        language="",
+    )
+
+    st.markdown("**Скачать результат**")
+    dl1, dl2, dl3 = st.columns(3)
+    with dl1:
+        st.download_button(
+            label="⬇️ Скачать .txt",
+            data=generate_ocr_txt(pages),
+            file_name=f"{base}_ocr.txt",
+            mime="text/plain",
+            use_container_width=True,
+        )
+    with dl2:
+        st.download_button(
+            label="⬇️ Скачать .md",
+            data=generate_ocr_md(pages),
+            file_name=f"{base}_ocr.md",
+            mime="text/markdown",
+            use_container_width=True,
+        )
+    with dl3:
+        st.download_button(
+            label="⬇️ Скачать .json",
+            data=generate_ocr_json(pages),
+            file_name=f"{base}_ocr.json",
+            mime="application/json",
+            use_container_width=True,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -171,25 +296,46 @@ def _file_emoji(ext: str) -> str:
     }.get(ext, "📄")
 
 
-def _convert(file_path: str) -> tuple[str, str | None]:
+def _is_scanned(text: str) -> bool:
+    """True if markitdown returned suspiciously little text (likely a scan)."""
+    from core.ocr import is_scanned_pdf
+    return is_scanned_pdf(text)
+
+
+def _convert_markitdown(file_path: str) -> tuple[str, str | None]:
     try:
         from markitdown import MarkItDown
         md = MarkItDown()
         result = md.convert(file_path)
         text = result.text_content
-        if not text or not text.strip():
-            return "", (
-                "Файл не содержит извлекаемого текста. "
-                "Проверьте, что файл не пустой и не является сканом."
-            )
+        if text is None:
+            text = ""
         return text, None
     except ImportError:
         return "", (
             "Библиотека markitdown не установлена. "
-            "Запустите: pip install \"markitdown[pdf]\""
+            'Запустите: pip install "markitdown[pdf]"'
         )
     except Exception as e:
         return "", f"Ошибка при конвертации: {e}"
+
+
+def _run_ocr(file_path: str, lang: str = "rus+eng") -> tuple[list[dict], str | None]:
+    try:
+        from core.ocr import ocr_pdf
+        pages = ocr_pdf(file_path, lang=lang)
+        if not any(p["text"] for p in pages):
+            return pages, (
+                "OCR не смог распознать текст. "
+                "Проверьте качество скана и наличие нужного языкового пакета Tesseract."
+            )
+        return pages, None
+    except ImportError as e:
+        return [], str(e)
+    except RuntimeError as e:
+        return [], str(e)
+    except Exception as e:
+        return [], f"Ошибка OCR: {e}"
 
 
 def _cleanup() -> None:
@@ -199,5 +345,5 @@ def _cleanup() -> None:
             os.remove(file_path)
         except OSError:
             pass
-    for key in [_FILE_PATH, _FILE_NAME, _FILE_SIZE, _MD_RESULT, _STAGE]:
+    for key in [_FILE_PATH, _FILE_NAME, _FILE_SIZE, _MD_RESULT, _OCR_PAGES, _IS_OCR, _STAGE]:
         st.session_state.pop(key, None)

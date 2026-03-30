@@ -1,4 +1,4 @@
-"""Output generation functions for masked data and mapping files.
+"""Output generation functions for masked data, mapping files, and OCR results.
 
 Pure logic only — no Streamlit imports.
 
@@ -120,3 +120,39 @@ def generate_mapping_xlsx(mapping: dict) -> bytes:
         numeric_df.to_excel(writer, sheet_name="Числовой маппинг", index=False)
     buf.seek(0)
     return buf.read()
+
+
+# ---------------------------------------------------------------------------
+# OCR output helpers
+# ---------------------------------------------------------------------------
+
+def generate_ocr_txt(pages: list[dict]) -> bytes:
+    """Concatenate all pages into a plain-text file (UTF-8).
+
+    Pages are separated by a divider so the reader can locate page breaks.
+    """
+    parts: list[str] = []
+    for p in pages:
+        parts.append(f"--- Страница {p['page']} ---\n{p['text']}")
+    return "\n\n".join(parts).encode("utf-8")
+
+
+def generate_ocr_md(pages: list[dict]) -> bytes:
+    """Convert OCR pages to a Markdown document (UTF-8).
+
+    Each page becomes a level-2 heading so the document stays navigable
+    when opened in any Markdown viewer.
+    """
+    parts: list[str] = []
+    for p in pages:
+        parts.append(f"## Страница {p['page']}\n\n{p['text']}")
+    return "\n\n---\n\n".join(parts).encode("utf-8")
+
+
+def generate_ocr_json(pages: list[dict]) -> bytes:
+    """Serialize OCR result to a structured JSON file (UTF-8, Cyrillic not escaped)."""
+    payload = {
+        "total_pages": len(pages),
+        "pages": pages,
+    }
+    return json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8")
