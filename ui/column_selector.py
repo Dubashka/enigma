@@ -41,6 +41,7 @@ def render_column_selector(
         sheets:     {sheet_name: DataFrame} — original data
         detected:   {sheet_name: [sensitive_col_names]} — from detect_sensitive_columns
         ai_results: {sheet_name: {col_name: verdict}} — from check_columns_with_ai, or None
+        presidio_required: {sheet_name: [col_names]} — columns confirmed by Presidio
     """
     sheet_names = list(sheets.keys())
     tabs = st.tabs(sheet_names)
@@ -62,24 +63,26 @@ def render_column_selector(
             with btn_col2:
                 if st.button("Снять все", key=f"desel_all_{sheet}", use_container_width=True):
                     for col in df.columns:
-                        # Never uncheck required columns
                         if sheet_ai.get(col) != "required":
                             st.session_state[f"cb_{sheet}_{col}"] = False
                     st.rerun()
 
             st.divider()
 
-            # Header row — adjusted column widths
-            h_cb, h_badge, h_samples, h_toggle = st.columns([0.35, 0.12, 0.28, 0.25])
+            # Header row — columns depend on whether AI results are available
+            if ai_results is not None:
+                h_cb, h_badge, h_samples, h_ai, h_toggle = st.columns([0.30, 0.10, 0.25, 0.20, 0.15])
+                with h_ai:
+                    st.caption("AI-анализ")
+            else:
+                h_cb, h_badge, h_samples, h_toggle = st.columns([0.35, 0.12, 0.28, 0.25])
+
             with h_cb:
                 st.caption("Колонка")
             with h_badge:
                 st.caption("Тип")
             with h_samples:
                 st.caption("Примеры значений")
-            if ai_results is not None:
-                with h_ai:
-                    st.caption("AI-анализ")
             with h_toggle:
                 st.caption("")
 
@@ -91,10 +94,13 @@ def render_column_selector(
                 verdict = sheet_ai.get(col) if ai_results else None
                 is_required = verdict == "required" or col in presidio_cols
 
-                cb_col, badge_col, samples_col, toggle_col = st.columns([0.35, 0.12, 0.28, 0.25])
+                if ai_results is not None:
+                    cb_col, badge_col, samples_col, ai_col, toggle_col = st.columns([0.30, 0.10, 0.25, 0.20, 0.15])
+                else:
+                    cb_col, badge_col, samples_col, toggle_col = st.columns([0.35, 0.12, 0.28, 0.25])
+                    ai_col = None
 
                 with cb_col:
-                    # Pass value= only if key not yet in session_state to avoid conflict warning
                     cb_kwargs: dict = {"key": cb_key, "disabled": is_required}
                     if cb_key not in st.session_state:
                         cb_kwargs["value"] = col in detected_cols
