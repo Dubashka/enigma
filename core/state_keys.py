@@ -28,3 +28,6 @@ DECR_SHEETS = "decr_sheets"      # dict[str, pd.DataFrame] — uploaded masked f
 DECR_MAPPING = "decr_mapping"    # dict — loaded JSON mapping
 DECR_RESULT = "decr_result"      # dict[str, pd.DataFrame] — decrypted sheets
 DECR_FILE_PATH = "decr_file_path"  # str — path to uploaded masked file on disk
+
+# AI checker keys
+AI_RESULTS = "ai_results"  # dict[sheet_name, dict[col_name, "required"|"recommended"|"safe"]]

@@ -15,6 +15,12 @@ import unicodedata
 
 import pandas as pd
 
+from core.library import AttributeLibrary
+from core.faker_generator import detect_category, generate_fake_for_category
+from core.entity_resolution import build_entity_groups
+
+_library = AttributeLibrary()
+
 
 # Words to skip when deriving the prefix from a column name
 _SKIP_WORDS = {
@@ -86,19 +92,52 @@ def build_text_mapping(
     seen_keys: set[str] = set()
     counters: dict[str, int] = {}
 
+    # Entity resolution: group values referring to the same person
+    # e.g. "Иванов Иван Иванович", "Иванов И.И.", "Иванов" → same fake
+    try:
+        entity_groups = build_entity_groups(sheets, mask_config)
+    except Exception:
+        entity_groups = {}
+
     for sheet_name, df in sheets.items():
         config = mask_config.get(sheet_name, {})
         for col, col_type in config.items():
             if col_type != "text" or col not in df.columns:
                 continue
             prefix = _derive_prefix(col)
+            # Detect faker category once per column using actual values
+            faker_category = detect_category(col, df[col])
             for raw_val in df[col].dropna().unique():
                 norm_key = _normalize_key(str(raw_val))
                 if norm_key not in seen_keys:
                     seen_keys.add(norm_key)
-                    counters[prefix] = counters.get(prefix, 0) + 1
                     original = _normalize_original(str(raw_val))
-                    mapping[original] = f"{prefix} {_index_to_label(counters[prefix])}"
+
+                    # Entity resolution: redirect to canonical form's fake
+                    canonical = entity_groups.get(str(raw_val).strip())
+                    if canonical:
+                        canon_normalized = _normalize_original(canonical)
+                        if canon_normalized in mapping:
+                            mapping[original] = mapping[canon_normalized]
+                            _library.save(col, original, mapping[original])
+                            continue
+
+                    # Check library — exact match first, then fuzzy
+                    existing = _library.lookup(col, original)
+                    if not existing:
+                        existing = _library.lookup_fuzzy(original)
+                    if existing:
+                        mapping[original] = existing
+                        _library.save(col, original, existing)  # store this form too
+                    else:
+                        # Use faker if category detected, else prefix+index
+                        if faker_category:
+                            fake = generate_fake_for_category(faker_category)
+                        else:
+                            counters[prefix] = counters.get(prefix, 0) + 1
+                            fake = f"{prefix} {_index_to_label(counters[prefix])}"
+                        mapping[original] = fake
+                        _library.save(col, original, fake)
     return mapping
 
 
@@ -112,7 +151,16 @@ def build_numeric_mapping(
         for col, col_type in config.items():
             if col_type == "numeric":
                 numeric_cols.add(col)
-    return {col: random.uniform(0.5, 1.5) for col in numeric_cols}
+    result = {}
+    for col in numeric_cols:
+        existing = _library.lookup_numeric(col)
+        if existing is not None:
+            result[col] = existing
+        else:
+            coeff = random.uniform(0.5, 1.5)
+            _library.save_numeric(col, coeff)
+            result[col] = coeff
+    return result
 
 
 # ---------------------------------------------------------------------------
