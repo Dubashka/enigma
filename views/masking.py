@@ -5,7 +5,9 @@ from core.state_keys import (
     STAGE_UPLOADED, STAGE_COLUMNS, STAGE_MASKED,
     SELECTED_COLUMNS, MASK_CONFIG, MAPPING, MASKED_SHEETS, STATS,
     DL_XLSX, DL_MAP_JSON, DL_MAP_XLSX, FORMAT_MODE,
+    AI_RESULTS,
 )
+from core.ai_checker import check_columns_with_ai
 from core.parser import save_upload, parse_preview, parse_full, cleanup_upload
 from core.detector import detect_sensitive_columns, classify_column_type
 from core.masker import mask_sheets
@@ -14,6 +16,7 @@ from ui.step_indicator import render_steps
 from ui.column_selector import render_column_selector
 
 import pandas as pd
+import requests
 
 
 def render() -> None:
@@ -95,7 +98,30 @@ def _render_step_preview() -> None:
             _cleanup_and_reset()
             st.rerun()
     with col_next:
-        if st.button("Далее", type="primary", use_container_width=True):
+        if st.button("Маскирование с AI", type="primary", use_container_width=True):
+            with st.status("Анализируем столбцы с помощью AI…", expanded=True) as status:
+                st.write("🔍 Сканируем данные на наличие email, телефонов, IP…")
+                _, presidio_required = detect_sensitive_columns(sheets)
+                st.write("📤 Отправляем данные в LM Studio…")
+                try:
+                    result = check_columns_with_ai(sheets, presidio_required=presidio_required)
+                except requests.exceptions.ConnectionError:
+                    status.update(label="Ошибка подключения", state="error")
+                    st.error("Не удалось подключиться к LM Studio. Убедитесь, что он запущен на http://127.0.0.1:1234")
+                    st.stop()
+                except Exception as exc:
+                    status.update(label="Ошибка", state="error")
+                    st.error(f"Ошибка при обращении к AI: {exc}")
+                    st.stop()
+                st.write("✅ Ответ получен, применяем рекомендации…")
+                # Apply presidio overrides to result (presidio always wins)
+                for sheet_name, cols in presidio_required.items():
+                    for col in cols:
+                        if sheet_name in result:
+                            result[sheet_name][col] = "required"
+                st.session_state[AI_RESULTS] = result
+                _apply_ai_to_checkboxes(sheets, result)
+                status.update(label="Анализ завершён!", state="complete")
             st.session_state[STAGE] = STAGE_COLUMNS
             st.rerun()
 
@@ -103,18 +129,18 @@ def _render_step_preview() -> None:
 def _render_step_columns() -> None:
     render_steps(current=2)
     sheets = st.session_state[SHEETS]
+    ai_results = st.session_state.get(AI_RESULTS)
+
+    # Show AI results summary (collapsed by default)
+    if ai_results is not None:
+        _render_ai_summary(ai_results)
+
+    st.info("При необходимости отредактируйте выбор колонок вручную.")
 
     # Recompute detection — fast and stateless
-    detected = detect_sensitive_columns(sheets)
+    detected, presidio_required = detect_sensitive_columns(sheets)
 
-    # Show warning if nothing was auto-detected
-    all_detected = [col for cols in detected.values() for col in cols]
-    if not all_detected:
-        st.warning(
-            "Автоматически чувствительные колонки не обнаружены, выберите вручную"
-        )
-
-    render_column_selector(sheets, detected)
+    render_column_selector(sheets, detected, ai_results=ai_results, presidio_required=presidio_required)
 
     col_back, col_mask = st.columns([1, 1])
     with col_back:
@@ -152,6 +178,26 @@ def _render_step_columns() -> None:
             if not any_selected:
                 st.warning("Выберите хотя бы одну колонку для маскирования")
             else:
+                # Save verdicts to library based on user's actual selection
+                ai_results = st.session_state.get(AI_RESULTS, {})
+                try:
+                    from core.library import AttributeLibrary
+                    lib = AttributeLibrary()
+                    for sheet_name, df in sheets.items():
+                        sheet_ai = ai_results.get(sheet_name, {})
+                        selected_cols = set(mask_config.get(sheet_name, {}).keys())
+                        for col in df.columns:
+                            if col in selected_cols:
+                                # User chose to mask: keep AI verdict, but at least "required"
+                                ai_verdict = sheet_ai.get(col, "required")
+                                verdict = ai_verdict if ai_verdict in ("required", "recommended") else "required"
+                            else:
+                                # User chose not to mask
+                                verdict = "safe"
+                            lib.save_classification(col, verdict)
+                except Exception:
+                    pass
+
                 file_path = st.session_state.get(FILE_PATH)
                 progress = st.progress(0, text="Читаем файл…")
 
@@ -185,6 +231,59 @@ def _render_step_columns() -> None:
                 st.session_state[MASK_CONFIG] = mask_config
                 st.session_state[STAGE] = STAGE_MASKED
                 st.rerun()
+
+
+def _render_ai_summary(ai_results: dict[str, dict[str, str]]) -> None:
+    """Render a summary panel showing AI column classification counts."""
+    required_cols: list[str] = []
+    recommended_cols: list[str] = []
+    safe_cols: list[str] = []
+
+    for sheet_name, cols in ai_results.items():
+        for col, verdict in cols.items():
+            label = f"{col}" if len(ai_results) == 1 else f"{sheet_name} → {col}"
+            if verdict == "required":
+                required_cols.append(label)
+            elif verdict == "recommended":
+                recommended_cols.append(label)
+            else:
+                safe_cols.append(label)
+
+    with st.expander("Результат AI-анализа", expanded=False):
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.metric("⚠ Обязательно маскировать", len(required_cols))
+            for name in required_cols:
+                st.markdown(
+                    f"<span style='font-size:0.8em;color:#c0392b'>• {name}</span>",
+                    unsafe_allow_html=True,
+                )
+        with c2:
+            st.metric("● Рекомендуется маскировать", len(recommended_cols))
+            for name in recommended_cols:
+                st.markdown(
+                    f"<span style='font-size:0.8em;color:#856404'>• {name}</span>",
+                    unsafe_allow_html=True,
+                )
+        with c3:
+            st.metric("✓ Маскировать не нужно", len(safe_cols))
+            for name in safe_cols:
+                st.markdown(
+                    f"<span style='font-size:0.8em;color:#2e7d32'>• {name}</span>",
+                    unsafe_allow_html=True,
+                )
+
+
+def _apply_ai_to_checkboxes(
+    sheets: dict,
+    ai_results: dict[str, dict[str, str]],
+) -> None:
+    """Pre-set checkbox session-state keys based on AI verdicts."""
+    for sheet_name, df in sheets.items():
+        sheet_ai = ai_results.get(sheet_name, {})
+        for col in df.columns:
+            verdict = sheet_ai.get(col, "safe")
+            st.session_state[f"cb_{sheet_name}_{col}"] = verdict in ("required", "recommended")
 
 
 def _render_step_masked() -> None:
@@ -257,6 +356,6 @@ def _cleanup_and_reset() -> None:
     for key in [
         SHEETS, RAW_BYTES, STAGE, FILE_NAME, FILE_PATH,
         SELECTED_COLUMNS, MASK_CONFIG, MAPPING, MASKED_SHEETS, STATS,
-        DL_XLSX, DL_MAP_JSON, DL_MAP_XLSX, FORMAT_MODE,
+        DL_XLSX, DL_MAP_JSON, DL_MAP_XLSX, FORMAT_MODE, AI_RESULTS,
     ] + keys_to_clear:
         st.session_state.pop(key, None)

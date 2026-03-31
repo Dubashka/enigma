@@ -12,7 +12,7 @@ from core.detector import (
 
 def test_detect_sensitive_columns(sample_detection_sheets):
     """detect_sensitive_columns returns correct sensitive columns per sheet."""
-    result = detect_sensitive_columns(sample_detection_sheets)
+    result, _ = detect_sensitive_columns(sample_detection_sheets)
 
     # Лист1 checks
     assert "Имя предприятия" in result["Лист1"], "'Имя предприятия' should be detected (keyword 'имя')"
@@ -29,14 +29,14 @@ def test_detect_sensitive_columns(sample_detection_sheets):
 def test_detect_no_match_returns_empty():
     """detect_sensitive_columns returns empty lists when no columns match."""
     df = pd.DataFrame({"Дата": ["2024-01-01", "2024-01-02"], "Статус": ["OK", "NG"]})
-    result = detect_sensitive_columns({"Лист1": df})
+    result, _ = detect_sensitive_columns({"Лист1": df})
     assert result["Лист1"] == [], "No sensitive columns expected"
 
 
 def test_detect_case_insensitive():
     """Detection is case-insensitive: 'АВТОР Изменения' matches keyword 'автор'."""
     df = pd.DataFrame({"АВТОР Изменения": ["Иванов", "Петров"]})
-    result = detect_sensitive_columns({"Лист1": df})
+    result, _ = detect_sensitive_columns({"Лист1": df})
     assert "АВТОР Изменения" in result["Лист1"], "Case-insensitive match should work"
 
 

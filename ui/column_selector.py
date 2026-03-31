@@ -6,6 +6,21 @@ import pandas as pd
 
 from core.detector import classify_column_type
 
+_AI_BADGE = {
+    "required": (
+        "<span style='background:#fde8e8;color:#c0392b;border-radius:4px;"
+        "padding:2px 5px;font-size:0.75em;white-space:nowrap'>⚠ Обязательно</span>"
+    ),
+    "recommended": (
+        "<span style='background:#fff3cd;color:#856404;border-radius:4px;"
+        "padding:2px 5px;font-size:0.75em;white-space:nowrap'>● Рекомендуется</span>"
+    ),
+    "safe": (
+        "<span style='background:#e8f5e9;color:#2e7d32;border-radius:4px;"
+        "padding:2px 5px;font-size:0.75em;white-space:nowrap'>✓ Безопасно</span>"
+    ),
+}
+
 
 def _get_sample_values(series: pd.Series, n: int = 3) -> str:
     """Return a string of up to n non-null unique sample values from series."""
@@ -17,12 +32,15 @@ def _get_sample_values(series: pd.Series, n: int = 3) -> str:
 def render_column_selector(
     sheets: dict[str, pd.DataFrame],
     detected: dict[str, list[str]],
+    ai_results: dict[str, dict[str, str]] | None = None,
+    presidio_required: dict[str, list[str]] | None = None,
 ) -> None:
     """Render per-sheet column checkboxes with type badges, sample values and select-all buttons.
 
     Args:
-        sheets:   {sheet_name: DataFrame} — original data
-        detected: {sheet_name: [sensitive_col_names]} — from detect_sensitive_columns
+        sheets:     {sheet_name: DataFrame} — original data
+        detected:   {sheet_name: [sensitive_col_names]} — from detect_sensitive_columns
+        ai_results: {sheet_name: {col_name: verdict}} — from check_columns_with_ai, or None
     """
     sheet_names = list(sheets.keys())
     tabs = st.tabs(sheet_names)
@@ -31,6 +49,8 @@ def render_column_selector(
         with tab:
             df = sheets[sheet]
             detected_cols = detected.get(sheet, [])
+            sheet_ai = ai_results.get(sheet, {}) if ai_results else {}
+            presidio_cols = set(presidio_required.get(sheet, [])) if presidio_required else set()
 
             # "Выбрать все" / "Снять все" row
             btn_col1, btn_col2, _ = st.columns([1, 1, 4])
@@ -42,19 +62,28 @@ def render_column_selector(
             with btn_col2:
                 if st.button("Снять все", key=f"desel_all_{sheet}", use_container_width=True):
                     for col in df.columns:
-                        st.session_state[f"cb_{sheet}_{col}"] = False
+                        # Never uncheck required columns
+                        if sheet_ai.get(col) != "required":
+                            st.session_state[f"cb_{sheet}_{col}"] = False
                     st.rerun()
 
             st.divider()
 
             # Header row
-            h_cb, h_badge, h_samples, h_toggle = st.columns([0.5, 0.15, 0.25, 0.1])
+            if ai_results is not None:
+                h_cb, h_badge, h_samples, h_ai, h_toggle = st.columns([0.44, 0.12, 0.17, 0.17, 0.1])
+            else:
+                h_cb, h_badge, h_samples, h_toggle = st.columns([0.5, 0.15, 0.25, 0.1])
+
             with h_cb:
                 st.caption("Колонка")
             with h_badge:
                 st.caption("Тип")
             with h_samples:
                 st.caption("Примеры значений")
+            if ai_results is not None:
+                with h_ai:
+                    st.caption("AI-анализ")
             with h_toggle:
                 st.caption("")
 
@@ -62,19 +91,24 @@ def render_column_selector(
             for col in df.columns:
                 col_type = classify_column_type(col, df[col])
                 is_numeric_dtype = pd.api.types.is_numeric_dtype(df[col])
-                default_checked = st.session_state.get(
-                    f"cb_{sheet}_{col}",
-                    col in detected_cols,
-                )
+                cb_key = f"cb_{sheet}_{col}"
+                verdict = sheet_ai.get(col) if ai_results else None
+                is_required = verdict == "required" or col in presidio_cols
 
-                cb_col, badge_col, samples_col, toggle_col = st.columns([0.5, 0.15, 0.25, 0.1])
+                if ai_results is not None:
+                    cb_col, badge_col, samples_col, ai_col, toggle_col = st.columns(
+                        [0.44, 0.12, 0.17, 0.17, 0.1]
+                    )
+                else:
+                    cb_col, badge_col, samples_col, toggle_col = st.columns([0.5, 0.15, 0.25, 0.1])
+                    ai_col = None
 
                 with cb_col:
-                    st.checkbox(
-                        col,
-                        value=default_checked,
-                        key=f"cb_{sheet}_{col}",
-                    )
+                    # Pass value= only if key not yet in session_state to avoid conflict warning
+                    cb_kwargs: dict = {"key": cb_key, "disabled": is_required}
+                    if cb_key not in st.session_state:
+                        cb_kwargs["value"] = col in detected_cols
+                    st.checkbox(col, **cb_kwargs)
 
                 with badge_col:
                     if col_type == "text":
@@ -97,6 +131,11 @@ def render_column_selector(
                             f"<span style='color:#666;font-size:0.8em'>{sample_str}</span>",
                             unsafe_allow_html=True,
                         )
+
+                if ai_col is not None:
+                    with ai_col:
+                        if verdict and verdict in _AI_BADGE:
+                            st.markdown(_AI_BADGE[verdict], unsafe_allow_html=True)
 
                 with toggle_col:
                     if is_numeric_dtype and col_type == "numeric":
