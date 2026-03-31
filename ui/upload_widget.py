@@ -3,8 +3,8 @@ import pandas as pd
 
 
 def _safe_preview(df: pd.DataFrame) -> pd.DataFrame:
-    """Return head(20) with object-dtype columns cast to str for Arrow safety."""
-    preview = df.head(20).copy()
+    """Return head(5) with object-dtype columns cast to str for Arrow safety."""
+    preview = df.head(5).copy()
     for col in preview.columns:
         if preview[col].dtype == object:
             preview[col] = preview[col].astype(str)
@@ -12,7 +12,7 @@ def _safe_preview(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def render_preview(sheets: dict[str, pd.DataFrame]) -> None:
-    """Render preview of parsed sheets. 20 rows per sheet.
+    """Render preview of parsed sheets. 5 rows per sheet.
 
     Single sheet: no tabs, just dataframe.
     Multiple sheets: st.tabs with sheet names.

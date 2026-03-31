@@ -7,7 +7,6 @@ from core.state_keys import DECR_SHEETS, DECR_MAPPING, DECR_RESULT, DECR_FILE_PA
 from ui.upload_widget import render_preview
 from ui.step_indicator import render_steps, STEPS_DECRYPTION
 
-# Decryption-specific stage keys
 _STAGE = "decr_stage"
 _STAGE_UPLOAD = "upload"
 _STAGE_DECRYPT = "decrypt"
@@ -31,18 +30,17 @@ def render() -> None:
 def _render_step_upload() -> None:
     render_steps(current=1, steps=STEPS_DECRYPTION)
     st.subheader("Загрузите файлы")
-    st.markdown("Загрузите замаскированный файл и JSON-маппинг, чтобы восстановить оригинальные значения.")
 
     col_file, col_json = st.columns(2)
     with col_file:
         uploaded_file = st.file_uploader(
-            "Замаскированный файл (xlsx или csv)",
+            "Форматы: Excel (.xlsx) или CSV (.csv). Макс. размер: 200 MB.",
             type=["xlsx", "csv"],
             key="decr_file_uploader",
         )
     with col_json:
         uploaded_json = st.file_uploader(
-            "Файл маппинга (JSON)",
+            "Файл маппинга. Формат: JSON.",
             type=["json"],
             key="decr_json_uploader",
         )
@@ -77,10 +75,9 @@ def _render_step_decrypt() -> None:
     is_xlsx = file_name.lower().endswith(".xlsx")
 
     st.subheader(f"Замаскированные данные: {file_name}")
-    st.caption("Показаны первые 20 строк каждого листа")
+    st.caption("Показаны первые 5 строк")
     render_preview(sheets)
 
-    # Format mode selector (only for xlsx input)
     if is_xlsx:
         st.divider()
         st.markdown("**Формат выходного файла**")
@@ -101,7 +98,6 @@ def _render_step_decrypt() -> None:
         else:
             st.caption("Выходной файл будет содержать только данные без стилей.")
     else:
-        # CSV input — no formatting options applicable
         st.session_state[FORMAT_MODE] = "raw"
 
     col_back, col_decrypt = st.columns([1, 1])
@@ -128,14 +124,7 @@ def _render_step_result() -> None:
     is_csv = file_name.lower().endswith(".csv")
 
     st.subheader(f"Результат дешифровки: {file_name}")
-
-    if is_csv:
-        st.caption("📄 CSV-файл")
-    elif format_mode == "formatted":
-        st.caption("✅ Форматирование оригинала сохранено")
-    else:
-        st.caption("📄 Без форматирования")
-
+    st.caption("Показаны первые 5 строк")
     render_preview(result)
 
     base = file_name.rsplit(".", 1)[0] if "." in file_name else file_name
@@ -159,6 +148,7 @@ def _render_step_result() -> None:
         file_name=decr_file_name,
         mime=mime,
         use_container_width=True,
+        type="primary",
     )
 
     col_back, col_reset = st.columns([1, 1])
@@ -174,7 +164,6 @@ def _render_step_result() -> None:
 
 
 def _cleanup_and_reset() -> None:
-    """Clear all decryption state and remove uploaded file from disk."""
     file_path = st.session_state.get(DECR_FILE_PATH)
     if file_path:
         cleanup_upload(file_path)

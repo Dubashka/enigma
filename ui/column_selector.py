@@ -18,7 +18,7 @@ def render_column_selector(
     sheets: dict[str, pd.DataFrame],
     detected: dict[str, list[str]],
 ) -> None:
-    """Render per-sheet column checkboxes with type badges, sample values and select-all buttons.
+    """Render per-sheet column checkboxes with type badges, sample values.
 
     Args:
         sheets:   {sheet_name: DataFrame} — original data
@@ -32,23 +32,10 @@ def render_column_selector(
             df = sheets[sheet]
             detected_cols = detected.get(sheet, [])
 
-            # "Выбрать все" / "Снять все" row
-            btn_col1, btn_col2, _ = st.columns([1, 1, 4])
-            with btn_col1:
-                if st.button("Выбрать все", key=f"sel_all_{sheet}", use_container_width=True):
-                    for col in df.columns:
-                        st.session_state[f"cb_{sheet}_{col}"] = True
-                    st.rerun()
-            with btn_col2:
-                if st.button("Снять все", key=f"desel_all_{sheet}", use_container_width=True):
-                    for col in df.columns:
-                        st.session_state[f"cb_{sheet}_{col}"] = False
-                    st.rerun()
-
             st.divider()
 
-            # Header row
-            h_cb, h_badge, h_samples, h_toggle = st.columns([0.5, 0.15, 0.25, 0.1])
+            # Header row — adjusted column widths
+            h_cb, h_badge, h_samples, h_toggle = st.columns([0.35, 0.12, 0.28, 0.25])
             with h_cb:
                 st.caption("Колонка")
             with h_badge:
@@ -67,7 +54,7 @@ def render_column_selector(
                     col in detected_cols,
                 )
 
-                cb_col, badge_col, samples_col, toggle_col = st.columns([0.5, 0.15, 0.25, 0.1])
+                cb_col, badge_col, samples_col, toggle_col = st.columns([0.35, 0.12, 0.28, 0.25])
 
                 with cb_col:
                     st.checkbox(

@@ -27,9 +27,9 @@ _STAGE_RESULT  = "result"
 _FILE_PATH    = "pdf_md_file_path"
 _FILE_NAME    = "pdf_md_file_name"
 _FILE_SIZE    = "pdf_md_file_size"
-_MD_RESULT    = "pdf_md_result"      # str  — markitdown path
-_OCR_PAGES    = "pdf_md_ocr_pages"   # list[dict] — OCR path
-_IS_OCR       = "pdf_md_is_ocr"      # bool
+_MD_RESULT    = "pdf_md_result"
+_OCR_PAGES    = "pdf_md_ocr_pages"
+_IS_OCR       = "pdf_md_is_ocr"
 
 _SUPPORTED_TYPES = ["pdf", "docx", "pptx", "xlsx", "csv", "json"]
 
@@ -63,14 +63,9 @@ def render() -> None:
 def _render_step_upload() -> None:
     render_steps(current=1, steps=STEPS_PDF_MD)
     st.subheader("Загрузите файл")
-    st.caption(
-        "Поддерживаемые форматы: "
-        + ", ".join(f"**.{t}**" for t in _SUPPORTED_TYPES)
-        + ". Максимальный размер: 300 MB."
-    )
 
     uploaded = st.file_uploader(
-        "Выберите файл",
+        "Форматы: " + ", ".join(f".{t}" for t in _SUPPORTED_TYPES) + ". Макс. размер: 300 MB.",
         type=_SUPPORTED_TYPES,
         key="pdf_md_uploader",
     )
@@ -115,17 +110,16 @@ def _render_step_convert() -> None:
         unsafe_allow_html=True,
     )
 
-    # OCR options — shown only for PDF files
+    # OCR options — shown only for PDF, enabled by default
     force_ocr = False
     ocr_lang  = "rus+eng"
     if is_pdf:
         force_ocr = st.checkbox(
-            "📖 Это сканированный PDF (использовать OCR)",
-            value=False,
+            "Сканированный PDF",
+            value=True,
             help=(
-                "Включите, если PDF состоит из отсканированных страниц "
-                "и не содержит выделяемого текста. "
-                "Требует установленного Tesseract."
+                "Включите этот параметр, если ваш PDF является сканом и не содержит выделяемого текста. "
+                "При отключенном параметре будет использоваться быстрое извлечение текста без OCR — подходит только для текстовых PDF."
             ),
         )
         if force_ocr:
@@ -136,8 +130,7 @@ def _render_step_convert() -> None:
             )
             ocr_lang = _LANG_OPTIONS[lang_label]
             st.info(
-                "⏰ OCR обрабатывает каждую страницу отдельно — это может занять "
-                "несколько минут для многостраничных документов."
+                "⏰ OCR обрабатывает каждую страницу отдельно — для многостраничных документов ожидайте несколько минут."
             )
 
     col_back, col_convert = st.columns([1, 1])
@@ -149,7 +142,6 @@ def _render_step_convert() -> None:
         if st.button("Конвертировать", type="primary", use_container_width=True):
             file_path = st.session_state[_FILE_PATH]
             if is_pdf and force_ocr:
-                # --- OCR branch ---
                 with st.spinner("Распознаём текст через Tesseract…"):
                     pages, error = _run_ocr(file_path, lang=ocr_lang)
                 if error:
@@ -160,7 +152,6 @@ def _render_step_convert() -> None:
                     st.session_state[_STAGE]     = _STAGE_RESULT
                     st.rerun()
             else:
-                # --- markitdown branch ---
                 with st.spinner("Конвертируем…"):
                     md_text, error = _convert_markitdown(file_path)
                 if error:
@@ -169,7 +160,7 @@ def _render_step_convert() -> None:
                     st.warning(
                         "⚠️ Не удалось извлечь текст из PDF. "
                         "Похоже, это сканированный документ. "
-                        "Включите чекбокс **\"Это сканированный PDF\"** и попробуйте снова."
+                        "Включите параметр **\"Сканированный PDF\"** и попробуйте снова."
                     )
                 else:
                     st.session_state[_MD_RESULT] = md_text
@@ -206,7 +197,6 @@ def _render_step_result() -> None:
 
 
 def _render_md_result(base: str) -> None:
-    """Result section for markitdown path."""
     md_text = st.session_state[_MD_RESULT]
 
     col1, col2, col3 = st.columns(3)
@@ -218,16 +208,16 @@ def _render_md_result(base: str) -> None:
     st.code(md_text[:1000] + ("…" if len(md_text) > 1000 else ""), language="markdown")
 
     st.download_button(
-        label="⬇️ Скачать .md файл",
+        label="Скачать .md файл",
         data=md_text.encode("utf-8"),
         file_name=f"{base}.md",
         mime="text/markdown",
         use_container_width=True,
+        type="primary",
     )
 
 
 def _render_ocr_result(base: str) -> None:
-    """Result section for OCR path — two download formats: .md and .txt."""
     from core.output import generate_ocr_md, generate_ocr_txt
 
     pages = st.session_state[_OCR_PAGES]
@@ -246,23 +236,25 @@ def _render_ocr_result(base: str) -> None:
         language="",
     )
 
-    st.markdown("**Скачать результат**")
+    st.markdown("Скачать результат")
     dl1, dl2 = st.columns(2)
     with dl1:
         st.download_button(
-            label="⬇️ Скачать .md",
+            label="Скачать .md",
             data=generate_ocr_md(pages),
             file_name=f"{base}_ocr.md",
             mime="text/markdown",
             use_container_width=True,
+            type="primary",
         )
     with dl2:
         st.download_button(
-            label="⬇️ Скачать .txt",
+            label="Скачать .txt",
             data=generate_ocr_txt(pages),
             file_name=f"{base}_ocr.txt",
             mime="text/plain",
             use_container_width=True,
+            type="primary",
         )
 
 
@@ -282,7 +274,6 @@ def _file_emoji(ext: str) -> str:
 
 
 def _is_scanned(text: str) -> bool:
-    """True if markitdown returned suspiciously little text (likely a scan)."""
     from core.ocr import is_scanned_pdf
     return is_scanned_pdf(text)
 
@@ -297,10 +288,7 @@ def _convert_markitdown(file_path: str) -> tuple[str, str | None]:
             text = ""
         return text, None
     except ImportError:
-        return "", (
-            "Библиотека markitdown не установлена. "
-            'pip install "markitdown[pdf]"'
-        )
+        return "", 'pip install "markitdown[pdf]"'
     except Exception as e:
         return "", f"Ошибка при конвертации: {e}"
 
