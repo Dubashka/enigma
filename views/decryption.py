@@ -106,7 +106,7 @@ def _render_step_decrypt() -> None:
             _cleanup_and_reset()
             st.rerun()
     with col_decrypt:
-        if st.button("Дешифровать", type="primary", use_container_width=True):
+        if st.button("Демаскировать", type="primary", use_container_width=True):
             mapping = st.session_state[DECR_MAPPING]
             result = decrypt_sheets(sheets, mapping)
             st.session_state[DECR_RESULT] = result
@@ -123,7 +123,7 @@ def _render_step_result() -> None:
 
     is_csv = file_name.lower().endswith(".csv")
 
-    st.subheader(f"Результат дешифровки: {file_name}")
+    st.subheader(f"Результат демаскирования: {file_name}")
     st.caption("Показаны первые 5 строк")
     render_preview(result)
 
@@ -153,7 +153,7 @@ def _render_step_result() -> None:
 
     col_back, col_reset = st.columns([1, 1])
     with col_back:
-        if st.button("Назад к дешифровке", use_container_width=True):
+        if st.button("Назад к демаскированию", use_container_width=True):
             st.session_state.pop(DECR_RESULT, None)
             st.session_state[_STAGE] = _STAGE_DECRYPT
             st.rerun()
