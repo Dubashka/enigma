@@ -35,7 +35,7 @@ def render_column_selector(
     ai_results: dict[str, dict[str, str]] | None = None,
     presidio_required: dict[str, list[str]] | None = None,
 ) -> None:
-    """Render per-sheet column checkboxes with type badges, sample values and select-all buttons.
+    """Render per-sheet column checkboxes with type badges, sample values.
 
     Args:
         sheets:     {sheet_name: DataFrame} — original data
@@ -52,7 +52,7 @@ def render_column_selector(
             sheet_ai = ai_results.get(sheet, {}) if ai_results else {}
             presidio_cols = set(presidio_required.get(sheet, [])) if presidio_required else set()
 
-            # "Выбрать все" / "Снять все" row
+            # "Выбрать все" / "Снять все"
             btn_col1, btn_col2, _ = st.columns([1, 1, 4])
             with btn_col1:
                 if st.button("Выбрать все", key=f"sel_all_{sheet}", use_container_width=True):
@@ -69,12 +69,8 @@ def render_column_selector(
 
             st.divider()
 
-            # Header row
-            if ai_results is not None:
-                h_cb, h_badge, h_samples, h_ai, h_toggle = st.columns([0.44, 0.12, 0.17, 0.17, 0.1])
-            else:
-                h_cb, h_badge, h_samples, h_toggle = st.columns([0.5, 0.15, 0.25, 0.1])
-
+            # Header row — adjusted column widths
+            h_cb, h_badge, h_samples, h_toggle = st.columns([0.35, 0.12, 0.28, 0.25])
             with h_cb:
                 st.caption("Колонка")
             with h_badge:
@@ -95,13 +91,7 @@ def render_column_selector(
                 verdict = sheet_ai.get(col) if ai_results else None
                 is_required = verdict == "required" or col in presidio_cols
 
-                if ai_results is not None:
-                    cb_col, badge_col, samples_col, ai_col, toggle_col = st.columns(
-                        [0.44, 0.12, 0.17, 0.17, 0.1]
-                    )
-                else:
-                    cb_col, badge_col, samples_col, toggle_col = st.columns([0.5, 0.15, 0.25, 0.1])
-                    ai_col = None
+                cb_col, badge_col, samples_col, toggle_col = st.columns([0.35, 0.12, 0.28, 0.25])
 
                 with cb_col:
                     # Pass value= only if key not yet in session_state to avoid conflict warning

@@ -1,3 +1,5 @@
+import io
+import zipfile
 import streamlit as st
 from core.output import generate_masked_xlsx, generate_formatted_xlsx, generate_mapping_json, generate_mapping_xlsx
 from core.state_keys import (
@@ -17,6 +19,19 @@ from ui.column_selector import render_column_selector
 
 import pandas as pd
 import requests
+
+
+def _build_zip(xlsx_bytes: bytes, json_bytes: bytes, base_name: str) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(f"{base_name}_masked.xlsx", xlsx_bytes)
+        zf.writestr(f"{base_name}_mapping.json", json_bytes)
+    return buf.getvalue()
+
+
+def _generate_masked_csv(masked_sheets: dict) -> bytes:
+    first_df = next(iter(masked_sheets.values()))
+    return first_df.to_csv(index=False).encode("utf-8")
 
 
 def render() -> None:
@@ -39,14 +54,14 @@ def _render_step_upload() -> None:
     st.subheader("Загрузите файл для маскирования")
 
     uploaded_file = st.file_uploader(
-        "Выберите файл Excel (.xlsx) или CSV (.csv)",
+        "Форматы: Excel (.xlsx) или CSV (.csv). Максимальный размер: 200 MB.",
         type=["xlsx", "csv"],
         key="file_uploader_mask",
     )
 
     if uploaded_file is not None:
         try:
-            with st.spinner("Сохраняем и читаем превью файла…"):
+            with st.spinner("Читаем файл…"):
                 path = save_upload(uploaded_file)
                 preview_sheets = parse_preview(path)
             st.session_state[FILE_PATH] = path
@@ -62,13 +77,32 @@ def _render_step_preview() -> None:
     render_steps(current=1)
     sheets = st.session_state[SHEETS]
     file_name = st.session_state.get(FILE_NAME, "файл")
-    is_xlsx = file_name.lower().endswith(".xlsx")
 
     st.subheader(f"Превью: {file_name}")
-    st.caption("Показаны первые 20 строк каждого листа")
+    st.caption("Показаны первые 5 строк")
     render_preview(sheets)
 
-    # Format mode selector — only meaningful for xlsx (csv has no formatting)
+    col_back, col_next = st.columns([1, 1])
+    with col_back:
+        if st.button("Сбросить", use_container_width=True):
+            _cleanup_and_reset()
+            st.rerun()
+    with col_next:
+        if st.button("Далее", type="primary", use_container_width=True):
+            st.session_state[STAGE] = STAGE_COLUMNS
+            st.rerun()
+
+
+def _render_step_columns() -> None:
+    render_steps(current=2)
+    sheets = st.session_state[SHEETS]
+    file_name = st.session_state.get(FILE_NAME, "файл")
+    is_xlsx = file_name.lower().endswith(".xlsx")
+
+    detected = detect_sensitive_columns(sheets)
+    render_column_selector(sheets, detected)
+
+    # Format mode selector — moved here from step 1, only for xlsx
     if is_xlsx:
         st.divider()
         st.markdown("**Формат выходного файла**")
@@ -89,7 +123,6 @@ def _render_step_preview() -> None:
         else:
             st.caption("Выходной файл будет содержать только данные без стилей.")
     else:
-        # CSV — formatting not applicable
         st.session_state[FORMAT_MODE] = "raw"
 
     col_back, col_next = st.columns([1, 1])
@@ -149,7 +182,6 @@ def _render_step_columns() -> None:
             st.rerun()
     with col_mask:
         if st.button("Замаскировать", type="primary", use_container_width=True):
-            # Build mask_config from checkbox and selectbox states
             mask_config: dict[str, dict[str, str]] = {}
             any_selected = False
 
@@ -210,21 +242,20 @@ def _render_step_columns() -> None:
                 progress.progress(25, text=f"Файл прочитан ({total_rows:,} строк). Маскируем…")
 
                 masked_sheets, mapping, stats = mask_sheets(full_sheets, mask_config)
-                progress.progress(60, text="Маскирование завершено. Генерируем файлы для скачивания…")
+                progress.progress(60, text="Маскирование завершено. Генерируем файлы…")
 
-                # Generate output according to chosen format mode
                 format_mode = st.session_state.get(FORMAT_MODE, "raw")
                 if format_mode == "formatted" and file_path and file_path.lower().endswith(".xlsx"):
                     st.session_state[DL_XLSX] = generate_formatted_xlsx(file_path, masked_sheets)
                 else:
                     st.session_state[DL_XLSX] = generate_masked_xlsx(masked_sheets)
-                progress.progress(85, text="Замаскированный файл готов. Генерируем маппинги…")
+                progress.progress(85, text="Файл готов. Генерируем маппинг…")
 
                 st.session_state[DL_MAP_JSON] = generate_mapping_json(mapping)
                 st.session_state[DL_MAP_XLSX] = generate_mapping_xlsx(mapping)
                 progress.progress(100, text="Готово!")
 
-                preview_masked = {name: df.head(20) for name, df in masked_sheets.items()}
+                preview_masked = {name: df.head(5) for name, df in masked_sheets.items()}
                 st.session_state[MASKED_SHEETS] = preview_masked
                 st.session_state[MAPPING] = mapping
                 st.session_state[STATS] = stats
@@ -291,17 +322,10 @@ def _render_step_masked() -> None:
     masked_sheets = st.session_state[MASKED_SHEETS]
     stats = st.session_state[STATS]
     file_name = st.session_state.get(FILE_NAME, "файл")
-    format_mode = st.session_state.get(FORMAT_MODE, "raw")
+    is_csv = file_name.lower().endswith(".csv")
 
     st.subheader(f"Результат маскирования: {file_name}")
 
-    # Format mode badge
-    if format_mode == "formatted":
-        st.caption("✅ Форматирование оригинала сохранено")
-    else:
-        st.caption("📄 Без форматирования")
-
-    # Statistics
     stat_col1, stat_col2 = st.columns(2)
     with stat_col1:
         st.metric("Замаскировано значений", stats["masked_values"])
@@ -312,26 +336,47 @@ def _render_step_masked() -> None:
 
     base_name = file_name.rsplit(".", 1)[0] if "." in file_name else file_name
 
+    st.markdown("Скачать результат")
+    col1, col2 = st.columns(2)
+
+    with col1:
+        if is_csv:
+            csv_bytes = _generate_masked_csv(masked_sheets)
+            st.download_button(
+                label="Замаскированный файл (.csv)",
+                data=csv_bytes,
+                file_name=f"{base_name}_masked.csv",
+                mime="text/csv",
+                use_container_width=True,
+                type="primary",
+            )
+        else:
+            st.download_button(
+                label="Замаскированный файл (.xlsx)",
+                data=st.session_state[DL_XLSX],
+                file_name=f"{base_name}_masked.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                type="primary",
+            )
+
+    with col2:
+        st.download_button(
+            label="Маппинг (.json)",
+            data=st.session_state[DL_MAP_JSON],
+            file_name=f"{base_name}_mapping.json",
+            mime="application/json",
+            use_container_width=True,
+            type="primary",
+        )
+
     st.download_button(
-        label="Скачать замаскированный файл",
-        data=st.session_state[DL_XLSX],
-        file_name=f"{base_name}_masked.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
-    )
-    st.download_button(
-        label="Скачать маппинг (JSON)",
-        data=st.session_state[DL_MAP_JSON],
-        file_name=f"{base_name}_mapping.json",
-        mime="application/json",
-        use_container_width=True,
-    )
-    st.download_button(
-        label="Скачать маппинг (Excel)",
+        label="Маппинг (Excel)",
         data=st.session_state[DL_MAP_XLSX],
         file_name=f"{base_name}_mapping.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True,
+        type="primary",
     )
 
     col_back, col_reset = st.columns([1, 1])
@@ -348,7 +393,6 @@ def _render_step_masked() -> None:
 
 
 def _cleanup_and_reset() -> None:
-    """Clear all state and remove uploaded file from disk."""
     file_path = st.session_state.get(FILE_PATH)
     if file_path:
         cleanup_upload(file_path)

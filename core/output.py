@@ -1,4 +1,4 @@
-"""Output generation functions for masked data and mapping files.
+"""Output generation functions for masked data, mapping files, and OCR results.
 
 Pure logic only — no Streamlit imports.
 
@@ -31,6 +31,18 @@ def generate_masked_xlsx(masked_sheets: dict[str, pd.DataFrame]) -> bytes:
             df.to_excel(writer, sheet_name=sheet_name, index=False)
     buf.seek(0)
     return buf.read()
+
+
+def generate_masked_csv(masked_sheets: dict[str, pd.DataFrame]) -> bytes:
+    """Serialize the first (and typically only) sheet to CSV bytes (UTF-8 with BOM).
+
+    UTF-8 BOM ensures correct encoding detection when opening in Excel on Windows.
+    If the input had multiple sheets, only the first is exported (CSV is single-table).
+    """
+    df = next(iter(masked_sheets.values()))
+    buf = io.StringIO()
+    df.to_csv(buf, index=False, encoding="utf-8")
+    return buf.getvalue().encode("utf-8-sig")
 
 
 def generate_formatted_xlsx(
@@ -108,3 +120,39 @@ def generate_mapping_xlsx(mapping: dict) -> bytes:
         numeric_df.to_excel(writer, sheet_name="Числовой маппинг", index=False)
     buf.seek(0)
     return buf.read()
+
+
+# ---------------------------------------------------------------------------
+# OCR output helpers
+# ---------------------------------------------------------------------------
+
+def generate_ocr_txt(pages: list[dict]) -> bytes:
+    """Concatenate all pages into a plain-text file (UTF-8).
+
+    Pages are separated by a divider so the reader can locate page breaks.
+    """
+    parts: list[str] = []
+    for p in pages:
+        parts.append(f"--- Страница {p['page']} ---\n{p['text']}")
+    return "\n\n".join(parts).encode("utf-8")
+
+
+def generate_ocr_md(pages: list[dict]) -> bytes:
+    """Convert OCR pages to a Markdown document (UTF-8).
+
+    Each page becomes a level-2 heading so the document stays navigable
+    when opened in any Markdown viewer.
+    """
+    parts: list[str] = []
+    for p in pages:
+        parts.append(f"## Страница {p['page']}\n\n{p['text']}")
+    return "\n\n---\n\n".join(parts).encode("utf-8")
+
+
+def generate_ocr_json(pages: list[dict]) -> bytes:
+    """Serialize OCR result to a structured JSON file (UTF-8, Cyrillic not escaped)."""
+    payload = {
+        "total_pages": len(pages),
+        "pages": pages,
+    }
+    return json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8")

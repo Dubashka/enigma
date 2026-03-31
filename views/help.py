@@ -34,6 +34,48 @@ def render() -> None:
         """
     )
 
+    st.subheader("4. Конвертация сканированных PDF")
+    st.markdown(
+        """
+        1. Перейдите на вкладку **Конвертация в MD**.
+        2. Загрузите PDF-файл.
+        3. Если PDF является **сканом** (состоит из изображений страниц),
+           включите чекбокс **«Это сканированный PDF (использовать OCR)»**.
+        4. Выберите язык распознавания (русский+английский, только русский, только английский).
+        5. Нажмите **Конвертировать** — сервис распознает текст через Tesseract OCR.
+        6. Скачайте результат в нужном формате: **.txt**, **.md** или **.json**.
+        """
+    )
+
+    st.subheader("⚙️ Установка Tesseract (для OCR)")
+    st.markdown(
+        """
+        OCR-функция требует наличия **Tesseract** на сервере/машине, где запущен сервис.
+        Установите его одним из способов:
+
+        **Linux (Ubuntu / Debian):**
+        ```bash
+        sudo apt install tesseract-ocr tesseract-ocr-rus
+        ```
+
+        **macOS (Homebrew):**
+        ```bash
+        brew install tesseract
+        brew install tesseract-lang  # все языки, включая русский
+        ```
+
+        **Windows:**
+        Скачайте установщик с [github.com/UB-Mannheim/tesseract](https://github.com/UB-Mannheim/tesseract/wiki)
+        и добавьте путь к `tesseract.exe` в системную переменную `PATH`.
+        Языковой пакет для русского: выберите `rus` в процессе установки.
+
+        После установки проверьте, что Tesseract доступен:
+        ```bash
+        tesseract --version
+        ```
+        """
+    )
+
     st.divider()
 
     st.markdown(

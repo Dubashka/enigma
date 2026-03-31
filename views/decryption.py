@@ -2,12 +2,11 @@ import streamlit as st
 
 from core.parser import parse_upload, save_upload, cleanup_upload
 from core.decryptor import load_mapping_json, decrypt_sheets
-from core.output import generate_masked_xlsx, generate_formatted_xlsx
+from core.output import generate_masked_xlsx, generate_masked_csv, generate_formatted_xlsx
 from core.state_keys import DECR_SHEETS, DECR_MAPPING, DECR_RESULT, DECR_FILE_PATH, FORMAT_MODE
 from ui.upload_widget import render_preview
 from ui.step_indicator import render_steps, STEPS_DECRYPTION
 
-# Decryption-specific stage keys
 _STAGE = "decr_stage"
 _STAGE_UPLOAD = "upload"
 _STAGE_DECRYPT = "decrypt"
@@ -31,18 +30,17 @@ def render() -> None:
 def _render_step_upload() -> None:
     render_steps(current=1, steps=STEPS_DECRYPTION)
     st.subheader("Загрузите файлы")
-    st.markdown("Загрузите замаскированный файл и JSON-маппинг, чтобы восстановить оригинальные значения.")
 
     col_file, col_json = st.columns(2)
     with col_file:
         uploaded_file = st.file_uploader(
-            "Замаскированный файл (xlsx или csv)",
+            "Форматы: Excel (.xlsx) или CSV (.csv). Макс. размер: 200 MB.",
             type=["xlsx", "csv"],
             key="decr_file_uploader",
         )
     with col_json:
         uploaded_json = st.file_uploader(
-            "Файл маппинга (JSON)",
+            "Файл маппинга. Формат: JSON.",
             type=["json"],
             key="decr_json_uploader",
         )
@@ -77,10 +75,9 @@ def _render_step_decrypt() -> None:
     is_xlsx = file_name.lower().endswith(".xlsx")
 
     st.subheader(f"Замаскированные данные: {file_name}")
-    st.caption("Показаны первые 20 строк каждого листа")
+    st.caption("Показаны первые 5 строк")
     render_preview(sheets)
 
-    # Format mode selector
     if is_xlsx:
         st.divider()
         st.markdown("**Формат выходного файла**")
@@ -109,7 +106,7 @@ def _render_step_decrypt() -> None:
             _cleanup_and_reset()
             st.rerun()
     with col_decrypt:
-        if st.button("Дешифровать", type="primary", use_container_width=True):
+        if st.button("Демаскировать", type="primary", use_container_width=True):
             mapping = st.session_state[DECR_MAPPING]
             result = decrypt_sheets(sheets, mapping)
             st.session_state[DECR_RESULT] = result
@@ -124,34 +121,39 @@ def _render_step_result() -> None:
     format_mode = st.session_state.get(FORMAT_MODE, "raw")
     file_path = st.session_state.get(DECR_FILE_PATH)
 
-    st.subheader(f"Результат дешифровки: {file_name}")
+    is_csv = file_name.lower().endswith(".csv")
 
-    if format_mode == "formatted":
-        st.caption("✅ Форматирование оригинала сохранено")
-    else:
-        st.caption("📄 Без форматирования")
-
+    st.subheader(f"Результат демаскирования: {file_name}")
+    st.caption("Показаны первые 5 строк")
     render_preview(result)
 
     base = file_name.rsplit(".", 1)[0] if "." in file_name else file_name
-    decr_file_name = f"{base}_decrypted.xlsx"
 
-    if format_mode == "formatted" and file_path and file_path.lower().endswith(".xlsx"):
+    if is_csv:
+        decr_file_name = f"{base}_decrypted.csv"
+        output_bytes = generate_masked_csv(result)
+        mime = "text/csv"
+    elif format_mode == "formatted" and file_path and file_path.lower().endswith(".xlsx"):
+        decr_file_name = f"{base}_decrypted.xlsx"
         output_bytes = generate_formatted_xlsx(file_path, result)
+        mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     else:
+        decr_file_name = f"{base}_decrypted.xlsx"
         output_bytes = generate_masked_xlsx(result)
+        mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
     st.download_button(
         label="Скачать восстановленный файл",
         data=output_bytes,
         file_name=decr_file_name,
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        mime=mime,
         use_container_width=True,
+        type="primary",
     )
 
     col_back, col_reset = st.columns([1, 1])
     with col_back:
-        if st.button("Назад к дешифровке", use_container_width=True):
+        if st.button("Назад к демаскированию", use_container_width=True):
             st.session_state.pop(DECR_RESULT, None)
             st.session_state[_STAGE] = _STAGE_DECRYPT
             st.rerun()
@@ -162,7 +164,6 @@ def _render_step_result() -> None:
 
 
 def _cleanup_and_reset() -> None:
-    """Clear all decryption state and remove uploaded file from disk."""
     file_path = st.session_state.get(DECR_FILE_PATH)
     if file_path:
         cleanup_upload(file_path)
