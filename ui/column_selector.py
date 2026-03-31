@@ -32,6 +32,19 @@ def render_column_selector(
             df = sheets[sheet]
             detected_cols = detected.get(sheet, [])
 
+            # "Выбрать все" / "Снять все"
+            btn_col1, btn_col2, _ = st.columns([1, 1, 4])
+            with btn_col1:
+                if st.button("Выбрать все", key=f"sel_all_{sheet}", use_container_width=True):
+                    for col in df.columns:
+                        st.session_state[f"cb_{sheet}_{col}"] = True
+                    st.rerun()
+            with btn_col2:
+                if st.button("Снять все", key=f"desel_all_{sheet}", use_container_width=True):
+                    for col in df.columns:
+                        st.session_state[f"cb_{sheet}_{col}"] = False
+                    st.rerun()
+
             st.divider()
 
             # Header row — adjusted column widths
