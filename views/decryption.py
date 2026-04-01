@@ -34,7 +34,7 @@ def _render_step_upload() -> None:
     col_file, col_json = st.columns(2)
     with col_file:
         uploaded_file = st.file_uploader(
-            "Форматы: Excel (.xlsx) или CSV (.csv). Макс. размер: 200 MB.",
+            "Файл для демаскирования.",
             type=["xlsx", "csv"],
             key="decr_file_uploader",
         )
