@@ -137,7 +137,7 @@ def render_column_selector(
                     if is_numeric_dtype and col_type == "numeric":
                         st.selectbox(
                             "Тип",
-                            ["коэффициент", "идентификатор"],
+                            ["идентификатор", "коэффициент"],
                             key=f"type_{sheet}_{col}",
                             label_visibility="collapsed",
                         )

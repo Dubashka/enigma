@@ -54,7 +54,7 @@ def _render_step_upload() -> None:
     st.subheader("Загрузите файл для маскирования")
 
     uploaded_file = st.file_uploader(
-        " ",
+        "Форматы: Excel (.xlsx) или CSV (.csv). Максимальный размер: 200 MB.",
         type=["xlsx", "csv"],
         key="file_uploader_mask",
     )
@@ -124,13 +124,11 @@ def _render_step_columns() -> None:
     sheets = st.session_state[SHEETS]
     ai_results = st.session_state.get(AI_RESULTS)
 
-    # Show AI results summary (collapsed by default)
     if ai_results is not None:
         _render_ai_summary(ai_results)
 
     st.info("При необходимости отредактируйте выбор колонок вручную.")
 
-    # Recompute detection — fast and stateless
     detected, presidio_required = detect_sensitive_columns(sheets)
 
     render_column_selector(sheets, detected, ai_results=ai_results, presidio_required=presidio_required)
@@ -157,7 +155,7 @@ def _render_step_columns() -> None:
                             and col_type == "numeric"
                         ):
                             user_choice = st.session_state.get(
-                                f"type_{sheet_name}_{col}", "коэффициент"
+                                f"type_{sheet_name}_{col}", "идентификатор"
                             )
                             if user_choice == "идентификатор":
                                 sheet_config[col] = "text"
@@ -170,7 +168,6 @@ def _render_step_columns() -> None:
             if not any_selected:
                 st.warning("Выберите хотя бы одну колонку для маскирования")
             else:
-                # Save verdicts to library based on user's actual selection
                 ai_results = st.session_state.get(AI_RESULTS, {})
                 try:
                     from core.library import AttributeLibrary
@@ -180,11 +177,9 @@ def _render_step_columns() -> None:
                         selected_cols = set(mask_config.get(sheet_name, {}).keys())
                         for col in df.columns:
                             if col in selected_cols:
-                                # User chose to mask: keep AI verdict, but at least "required"
                                 ai_verdict = sheet_ai.get(col, "required")
                                 verdict = ai_verdict if ai_verdict in ("required", "recommended") else "required"
                             else:
-                                # User chose not to mask
                                 verdict = "safe"
                             lib.save_classification(col, verdict)
                 except Exception:
@@ -225,7 +220,6 @@ def _render_step_columns() -> None:
 
 
 def _render_ai_summary(ai_results: dict[str, dict[str, str]]) -> None:
-    """Render a summary panel showing AI column classification counts."""
     required_cols: list[str] = []
     recommended_cols: list[str] = []
     safe_cols: list[str] = []
@@ -269,7 +263,6 @@ def _apply_ai_to_checkboxes(
     sheets: dict,
     ai_results: dict[str, dict[str, str]],
 ) -> None:
-    """Pre-set checkbox session-state keys based on AI verdicts."""
     for sheet_name, df in sheets.items():
         sheet_ai = ai_results.get(sheet_name, {})
         for col in df.columns:
