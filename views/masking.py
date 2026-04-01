@@ -288,10 +288,9 @@ def _render_step_masked() -> None:
     render_preview(masked_sheets)
 
     base_name = file_name.rsplit(".", 1)[0] if "." in file_name else file_name
-
+    st.markdown("Скачать результат")
     st.warning("⚠️ Не забудьте скачать маппинг (.json) для дальнейшей дешифровки")
 
-    st.markdown("Скачать результат")
     col1, col2 = st.columns(2)
 
     with col1:
