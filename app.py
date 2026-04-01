@@ -2,7 +2,7 @@ import pathlib
 import streamlit as st
 
 st.set_page_config(
-    page_title="Enigma — Шифрование данных для LLM",
+    page_title="Reksoft Consulting. Шифрование данных для LLM",
     layout="wide",
     initial_sidebar_state="expanded",
 )
