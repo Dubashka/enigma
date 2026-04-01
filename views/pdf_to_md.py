@@ -65,7 +65,7 @@ def _render_step_upload() -> None:
     st.subheader("Загрузите файл")
 
     uploaded = st.file_uploader(
-        "Форматы: " + ", ".join(f".{t}" for t in _SUPPORTED_TYPES) + ". Макс. размер: 300 MB.",
+        " ",
         type=_SUPPORTED_TYPES,
         key="pdf_md_uploader",
     )
