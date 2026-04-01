@@ -82,55 +82,16 @@ def _render_step_preview() -> None:
     st.caption("Показаны первые 5 строк")
     render_preview(sheets)
 
-    col_back, col_next = st.columns([1, 1])
+    col_back, col_next, col_ai = st.columns([1, 1, 1])
     with col_back:
         if st.button("Сбросить", use_container_width=True):
             _cleanup_and_reset()
             st.rerun()
     with col_next:
-        if st.button("Далее", type="primary", use_container_width=True):
+        if st.button("Далее", use_container_width=True):
             st.session_state[STAGE] = STAGE_COLUMNS
             st.rerun()
-
-
-def _render_step_columns() -> None:
-    render_steps(current=2)
-    sheets = st.session_state[SHEETS]
-    file_name = st.session_state.get(FILE_NAME, "файл")
-    is_xlsx = file_name.lower().endswith(".xlsx")
-
-    detected = detect_sensitive_columns(sheets)
-    render_column_selector(sheets, detected)
-
-    # Format mode selector — moved here from step 1, only for xlsx
-    if is_xlsx:
-        st.divider()
-        st.markdown("**Формат выходного файла**")
-        format_choice = st.radio(
-            "Формат выходного файла",
-            options=["raw", "formatted"],
-            format_func=lambda x: (
-                "Без форматирования (быстро)" if x == "raw"
-                else "Сохранить форматирование оригинала"
-            ),
-            index=0 if st.session_state.get(FORMAT_MODE, "raw") == "raw" else 1,
-            horizontal=True,
-            label_visibility="collapsed",
-        )
-        st.session_state[FORMAT_MODE] = format_choice
-        if format_choice == "formatted":
-            st.caption("Цвета ячеек, шрифты, границы и ширина колонок будут сохранены из оригинального файла.")
-        else:
-            st.caption("Выходной файл будет содержать только данные без стилей.")
-    else:
-        st.session_state[FORMAT_MODE] = "raw"
-
-    col_back, col_next = st.columns([1, 1])
-    with col_back:
-        if st.button("Сбросить", use_container_width=True):
-            _cleanup_and_reset()
-            st.rerun()
-    with col_next:
+    with col_ai:
         if st.button("Маскирование с AI", type="primary", use_container_width=True):
             with st.status("Анализируем столбцы с помощью AI…", expanded=True) as status:
                 st.write("🔍 Сканируем данные на наличие email, телефонов, IP…")
@@ -147,7 +108,6 @@ def _render_step_columns() -> None:
                     st.error(f"Ошибка при обращении к AI: {exc}")
                     st.stop()
                 st.write("✅ Ответ получен, применяем рекомендации…")
-                # Apply presidio overrides to result (presidio always wins)
                 for sheet_name, cols in presidio_required.items():
                     for col in cols:
                         if sheet_name in result:
