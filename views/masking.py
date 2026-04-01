@@ -54,7 +54,7 @@ def _render_step_upload() -> None:
     st.subheader("Загрузите файл для маскирования")
 
     uploaded_file = st.file_uploader(
-        "Форматы: Excel (.xlsx) или CSV (.csv). Максимальный размер: 200 MB.",
+        " ",
         type=["xlsx", "csv"],
         key="file_uploader_mask",
     )
