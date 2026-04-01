@@ -13,10 +13,9 @@ if _logo.exists():
 else:
     st.sidebar.title("Enigma")
 
-st.sidebar.markdown("**Excel / CSV**")
 page = st.sidebar.radio(
     "Режим",
-    ["Маскирование", "Демаскирование", "Конвертация в MD", "Анонимизация MD", "Восстановление MD", "Помощь"],
+    ["Маскирование", "Демаскирование", "Конвертация в MD", "Помощь"],
     label_visibility="collapsed",
 )
 
@@ -28,12 +27,6 @@ elif page == "Демаскирование":
     render()
 elif page == "Конвертация в MD":
     from views.pdf_to_md import render
-    render()
-elif page == "Анонимизация MD":
-    from views.md_masking import render
-    render()
-elif page == "Восстановление MD":
-    from views.md_decryption import render
     render()
 elif page == "Помощь":
     from views.help import render
