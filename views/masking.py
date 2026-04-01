@@ -289,6 +289,8 @@ def _render_step_masked() -> None:
 
     base_name = file_name.rsplit(".", 1)[0] if "." in file_name else file_name
 
+    st.warning("⚠️ Не забудьте скачать маппинг (.json) для дальнейшей дешифровки")
+
     st.markdown("Скачать результат")
     col1, col2 = st.columns(2)
 
@@ -329,7 +331,6 @@ def _render_step_masked() -> None:
         file_name=f"{base_name}_mapping.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True,
-        type="primary",
     )
 
     col_back, col_reset = st.columns([1, 1])
