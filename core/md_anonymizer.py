@@ -15,109 +15,109 @@ from typing import Any
 # Regex patterns for structured PII
 # ---------------------------------------------------------------------------
 
-# ORG opening/closing quote characters: « » " '
-_ORG_OPEN  = r"[«"']"
-_ORG_CLOSE = r"[»"']"
+# ORG opening/closing quote characters: « » "
+_ORG_OPEN  = r'[«"]'
+_ORG_CLOSE = r'[»"]'
 
 # Legal-form prefixes used to detect org names
 _ORG_PREFIXES = ("ООО", "ОАО", "ЗАО", "АО", "ПАО", "ИП", "НКО", "ФГУП", "ГУП", "АНО")
 _ORG_PREFIX_RE = "|".join(_ORG_PREFIXES)
 
 # Cyrillic helpers (no quantifier — add explicitly per pattern)
-_C  = r"[А-ЯЁ]"   # one uppercase Cyrillic letter
-_cl = r"[а-яё]"   # one lowercase Cyrillic letter
+_C  = r'[А-ЯЁ]'   # one uppercase Cyrillic letter
+_cl = r'[а-яё]'   # one lowercase Cyrillic letter
 
 # ---------------------------------------------------------------------------
 # Address building blocks
 # ---------------------------------------------------------------------------
 # Street-type keywords
 _STREET_KW = (
-    r"(?:ул(?:\.|[и]ца)"
-    r"|пр(?:\.|[о]спект)"
-    r"|пер(?:\.|[е]улок)"
-    r"|наб(?:\.|[е]режная)"
-    r"|шоссе"
-    r"|пл(?:\.|[о]щадь)"
-    r"|б(?:-р|ульвар)"
-    r"|проезд"
-    r"|тупик)"
+    r'(?:ул(?:\.|[и]ца)'
+    r'|пр(?:\.|[о]спект)'
+    r'|пер(?:\.|[е]улок)'
+    r'|наб(?:\.|[е]режная)'
+    r'|шоссе'
+    r'|пл(?:\.|[о]щадь)'
+    r'|б(?:-р|ульвар)'
+    r'|проезд'
+    r'|тупик)'
 )
 # Street name: 1-4 words (letters, digits, hyphens)
-_STREET_NAME = r"[А-ЯЁа-яё0-9][\wа-яёА-ЯЁ\-]*(?:\s+[А-ЯЁа-яё0-9][\wа-яёА-ЯЁ\-]*){0,3}"
+_STREET_NAME = r'[А-ЯЁа-яё0-9][\wа-яёА-ЯЁ\-]*(?:\s+[А-ЯЁа-яё0-9][\wа-яёА-ЯЁ\-]*){0,3}'
 # House / building / office suffixes (standalone, each wrapped in non-capturing group)
-_HOUSE      = r"(?:,?\s*д(?:\.|ом\.?)\s*\d+[\w\-/]*)"
-_HOUSE_BARE = r",?\s*д(?:\.|ом\.?)\s*\d+[\w\-/]*"   # same without outer (?:...)
-_BLDG       = r"(?:,?\s*(?:к(?:\.|орп\.?)|стр(?:\.)?)\s*\d+[\w\-/]*)"
-_FLAT       = r"(?:,?\s*(?:кв(?:\.|арт\.?)|оф(?:\.)?)\s*\d+)"
+_HOUSE      = r'(?:,?\s*д(?:\.|ом\.?)\s*\d+[\w\-/]*)'
+_HOUSE_BARE = r',?\s*д(?:\.|ом\.?)\s*\d+[\w\-/]*'   # same without outer (?:...)
+_BLDG       = r'(?:,?\s*(?:к(?:\.|орп\.?)|стр(?:\.)?)\s*\d+[\w\-/]*)'
+_FLAT       = r'(?:,?\s*(?:кв(?:\.|арт\.?)|оф(?:\.)?)\s*\d+)'
 # City/settlement prefixes
-_CITY_KW   = r"(?:г(?:\.|[о]род)|п(?:\.|[о]с(?:\.|[е]лок))|с(?:\.|[е]ло)|д(?:\.|[е]ревня))"
-_CITY_NAME = r"[А-ЯЁ][а-яёА-ЯЁ\-]+(?:-[А-ЯЁ][а-яёА-ЯЁ\-]+)*"
+_CITY_KW   = r'(?:г(?:\.|[о]род)|п(?:\.|[о]с(?:\.|[е]лок))|с(?:\.|[е]ло)|д(?:\.|[е]ревня))'
+_CITY_NAME = r'[А-ЯЁ][а-яёА-ЯЁ\-]+(?:-[А-ЯЁ][а-яёА-ЯЁ\-]+)*'
 
 # Russian month names (all grammatical cases)
 _MONTH_NAME = (
-    r"(?:января|январе|январь"
-    r"|февраля|феврале|февраль"
-    r"|марта|марте|март"
-    r"|апреля|апреле|апрель"
-    r"|мая|мае|май"
-    r"|июня|июне|июнь"
-    r"|июля|июле|июль"
-    r"|августа|августе|август"
-    r"|сентября|сентябре|сентябрь"
-    r"|октября|октябре|октябрь"
-    r"|ноября|ноябре|ноябрь"
-    r"|декабря|декабре|декабрь)"
+    r'(?:января|январе|январь'
+    r'|февраля|феврале|февраль'
+    r'|марта|марте|март'
+    r'|апреля|апреле|апрель'
+    r'|мая|мае|май'
+    r'|июня|июне|июнь'
+    r'|июля|июле|июль'
+    r'|августа|августе|август'
+    r'|сентября|сентябре|сентябрь'
+    r'|октября|октябре|октябрь'
+    r'|ноября|ноябре|ноябрь'
+    r'|декабря|декабре|декабрь)'
 )
 
 _PATTERNS: list[tuple[str, str]] = [
     # Email — before phone to avoid partial overlap
-    ("EMAIL", r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}"),
+    ("EMAIL", r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}'),
     # Russian mobile / landline phones
-    ("ТЕЛЕФОН", r"(?<!\d)(?:\+7|8)[\s\-]?\(?\d{3}\)?[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}(?!\d)"),
+    ("ТЕЛЕФОН", r'(?<!\d)(?:\+7|8)[\s\-]?\(?\d{3}\)?[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}(?!\d)'),
     # IPv4
-    ("IP", r"\b(?:\d{1,3}\.){3}\d{1,3}\b"),
+    ("IP", r'\b(?:\d{1,3}\.){3}\d{1,3}\b'),
     # Russian legal entities
     (
         "ОРГ",
-        r"(?:" + _ORG_PREFIX_RE + r")"
-        r"(?:"
-        r"\s+" + _ORG_OPEN + r"[А-ЯЁа-яёA-Za-z0-9][\w\s\-]*?" + _ORG_CLOSE
-        + r"|\s+[А-ЯЁ][а-яёА-ЯЁ\w\-]{1,40}(?:\s+[А-ЯЁ][а-яёА-ЯЁ\w\-]{1,40}){0,3}"
-        + r")?",
+        r'(?:' + _ORG_PREFIX_RE + r')'
+        r'(?:'
+        r'\s+' + _ORG_OPEN + r'[А-ЯЁа-яёA-Za-z0-9][\w\s\-]*?' + _ORG_CLOSE
+        + r'|\s+[А-ЯЁ][а-яёА-ЯЁ\w\-]{1,40}(?:\s+[А-ЯЁ][а-яёА-ЯЁ\w\-]{1,40}){0,3}'
+        + r')?',
     ),
     # ---- Person name formats (ФИО) — initials-based, high precision ----
     # Format 1: Фамилия И.О.  e.g. Скорочкина А.А. (both initials required)
     (
         "ФИО",
-        _C + _cl + r"+\s+" + _C + r"\." + _C + r"\.",
+        _C + _cl + r'+\s+' + _C + r'\.' + _C + r'\.',
     ),
     # Format 2: И.О. Фамилия  e.g. А.А. Скорочкина
     (
         "ФИО",
-        _C + r"\." + _C + r"\.\s+" + _C + _cl + r"+",
+        _C + r'\.' + _C + r'\.\s+' + _C + _cl + r'+',
     ),
     # ---- Address patterns (АДРЕС) ----
     # Format A: г. Москва, ул. Ленина, д. 5[, кв. 12]
     (
         "АДРЕС",
-        _CITY_KW + r"\s+" + _CITY_NAME + r",\s*"
-        + _STREET_KW + r"\s+" + _STREET_NAME
-        + _HOUSE + r"?" + _BLDG + r"?" + _FLAT + r"?",
+        _CITY_KW + r'\s+' + _CITY_NAME + r',\s*'
+        + _STREET_KW + r'\s+' + _STREET_NAME
+        + _HOUSE + r'?' + _BLDG + r'?' + _FLAT + r'?',
     ),
     # Format B: ул. Ленина, д. 5[, к. 2][, кв. 12]  (no city prefix)
     (
         "АДРЕС",
-        _STREET_KW + r"\s+" + _STREET_NAME + r",\s*"
-        + _HOUSE_BARE + _BLDG + r"?" + _FLAT + r"?",
+        _STREET_KW + r'\s+' + _STREET_NAME + r',\s*'
+        + _HOUSE_BARE + _BLDG + r'?' + _FLAT + r'?',
     ),
     # Postal index intentionally omitted — too many false positives.
     #
     # Contract / document numbers
-    ("ДОГОВОР", r"№\s?\d+[\-/\d]*"),
+    ("ДОГОВОР", r'№\s?\d+[\-/\d]*'),
     # Dates: 15.03.2024 / 2024-03-15
-    ("ДАТА", r"\b(?:\d{2}\.\d{2}\.\d{4}|\d{4}-\d{2}-\d{2})\b"),
+    ("ДАТА", r'\b(?:\d{2}\.\d{2}\.\d{4}|\d{4}-\d{2}-\d{2})\b'),
     # Dates: «01» марта 2026 г. / 01 марта 2026 г.
-    ("ДАТА", r"(?:«\d{1,2}»|\"\d{1,2}\"|\b\d{1,2})\s+" + _MONTH_NAME + r"\s+\d{4}(?:\s*г\.?)?"),
+    ("ДАТА", r'(?:«\d{1,2}»|"\d{1,2}"|\b\d{1,2})\s+' + _MONTH_NAME + r'\s+\d{4}(?:\s*г\.?)?'),
 ]
 
 # Sentinel prefix injected around each line when feeding to Natasha.
@@ -134,10 +134,10 @@ def _extract_org_core(org_value: str) -> str | None:
             break
     if not value:
         return None
-    value = re.sub(r"^[«"']|[»"']$", "", value).strip()
-    if re.match(r"^[А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ]\.){1,2}\s*$", value):
+    value = re.sub(r'[«"]|[»"]', "", value).strip()
+    if re.match(r'^[А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ]\.){1,2}\s*$', value):
         return None
-    if re.match(r"^[А-ЯЁA-Z]", value) and len(value) >= 3:
+    if re.match(r'^[А-ЯЁA-Z]', value) and len(value) >= 3:
         return value
     return None
 
@@ -176,7 +176,7 @@ def _expand_org_spans(
         stem = _org_stem(core)
         if len(stem) < 4:
             continue
-        pattern = r"(?<![\wа-яёА-ЯЁ])" + re.escape(stem) + r"[а-яёА-ЯЁA-Za-z]*(?![\wа-яёА-ЯЁA-Za-z])"
+        pattern = r'(?<![\wа-яёА-ЯЁ])' + re.escape(stem) + r'[а-яёА-ЯЁA-Za-z]*(?![\wа-яёА-ЯЁA-Za-z])'
         for m in re.finditer(pattern, text, flags=re.IGNORECASE):
             if m.start() not in existing_starts:
                 extra.append((m.start(), m.end(), "ОРГ", m.group()))
@@ -229,7 +229,7 @@ def _natasha_entities_per_line(text: str) -> list[tuple[int, int, str, str]]:
     for raw_line in text.split("\n"):
         stripped = raw_line.strip()
         if stripped and re.match(
-            r"^[А-ЯЁ][а-яёА-ЯЁ\-]+(?:\s+[А-ЯЁ][а-яёА-ЯЁ\-]+){1,3}$",
+            r'^[А-ЯЁ][а-яёА-ЯЁ\-]+(?:\s+[А-ЯЁ][а-яёА-ЯЁ\-]+){1,3}$',
             stripped
         ):
             probe = _NER_PREFIX + stripped
@@ -322,7 +322,7 @@ def anonymize(
             placeholder = value_cache[value]
         else:
             counters[label] = counters.get(label, 0) + 1
-            placeholder = f"[{label}_{counters[label]}]"
+            placeholder = f'[{label}_{counters[label]}]'
             value_cache[value] = placeholder
             mapping.setdefault(label, {})[placeholder] = value
         replacements.append((start, end, placeholder))
@@ -348,7 +348,7 @@ def anonymize_extra_terms(
             placeholder = value_cache[term_lower]
         else:
             counter += 1
-            placeholder = f"[СКРЫТО_{counter}]"
+            placeholder = f'[СКРЫТО_{counter}]'
             value_cache[term_lower] = placeholder
             mapping.setdefault("СКРЫТО", {})[placeholder] = term
         text = re.sub(re.escape(term), placeholder, text, flags=re.IGNORECASE)
