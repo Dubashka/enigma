@@ -19,6 +19,10 @@ from typing import Any
 _ORG_OPEN  = r'[«"\']'
 _ORG_CLOSE = r'[»"\']'
 
+# Legal-form prefixes used to detect org names
+_ORG_PREFIXES = ("ООО", "ОАО", "ЗАО", "АО", "ПАО", "ИП", "НКО", "ФГУП", "ГУП", "АНО")
+_ORG_PREFIX_RE = "|".join(_ORG_PREFIXES)
+
 _PATTERNS: list[tuple[str, str]] = [
     # Email — before phone to avoid partial overlap
     ("EMAIL", r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}"),
@@ -27,10 +31,9 @@ _PATTERNS: list[tuple[str, str]] = [
     # IPv4
     ("IP", r"\b(?:\d{1,3}\.){3}\d{1,3}\b"),
     # Russian legal entities: ООО "Ромашка", АО Северсталь, ИП Иванов А.А. etc.
-    # Covers: ООО ОАО ЗАО АО ПАО ИП НКО ФГУП ГУП АНО followed by quoted or capitalized name
     (
         "ОРГ",
-        r"(?:ООО|ОАО|ЗАО|АО|ПАО|ИП|НКО|ФГУП|ГУП|АНО)"
+        r"(?:" + _ORG_PREFIX_RE + r")"
         r"(?:"
         r"\s+" + _ORG_OPEN + r"[А-ЯЁа-яёA-Za-z0-9][\w\s\-]*?" + _ORG_CLOSE
         + r"|\s+[А-ЯЁ][а-яёА-ЯЁ\w\-]{1,40}(?:\s+[А-ЯЁ][а-яёА-ЯЁ\w\-]{1,40}){0,3}"
@@ -43,6 +46,104 @@ _PATTERNS: list[tuple[str, str]] = [
     # Dates: 15.03.2024 / 2024-03-15
     ("ДАТА", r"\b(?:\d{2}\.\d{2}\.\d{4}|\d{4}-\d{2}-\d{2})\b"),
 ]
+
+
+def _extract_org_core(org_value: str) -> str | None:
+    """Extract the bare company name from a full ORG match.
+
+    Examples:
+        'ООО "Рексофт"'  -> 'Рексофт'
+        "ООО 'Ромашка'" -> 'Ромашка'
+        'АО Северсталь'    -> 'Северсталь'
+        'ИП Иванов А.А.'    -> None  (person name, skip)
+    Returns None if no extractable core is found.
+    """
+    # Strip leading legal prefix
+    value = org_value.strip()
+    for prefix in sorted(_ORG_PREFIXES, key=len, reverse=True):
+        if value.upper().startswith(prefix):
+            value = value[len(prefix):].strip()
+            break
+
+    if not value:
+        return None
+
+    # Remove surrounding quotes
+    value = re.sub(r'^[«"\']|[»"\']$', "", value).strip()
+
+    # Skip if looks like a person name (initials pattern: Word A.A. or single short word)
+    if re.match(r'^[A-ЯЁ][a-яё]+(?:\s+[A-ЯЁ]\.){1,2}\s*$', value):
+        return None
+
+    # Must start with a capital letter and be at least 3 chars
+    if re.match(r'^[A-ЯЁA-Z]', value) and len(value) >= 3:
+        # Return only the first word as the core (handles multi-word names like Северная Сталь)
+        # We keep the full name so all words are covered by the stem search
+        return value
+
+    return None
+
+
+def _org_stem(name: str) -> str:
+    """Return the root stem to match inflected forms.
+
+    For Cyrillic words we strip common noun endings to get a stable root.
+    Example: 'Рексофт' -> 'Рексофт'  (no ending to strip)
+             'Ромашка' -> 'Ромашк'   (strip -а)
+             'Газпром' -> 'Газпром'  (no ending)
+    We require at least 4 chars in the stem to avoid over-matching short words.
+    """
+    # Endings to strip (order matters — longer first)
+    endings = ["овой", "овый", "евой", "евый", "еской", "еский",
+               "овое", "евое", "еское",
+               "ами", "ах", "ом", "ой", "ого",
+               "ем", "ей", "его",
+               "ю", "я", "е", "и", "у", "а"]
+    word = name.split()[0]  # use first word only for stemming
+    lower = word.lower()
+    for ending in endings:
+        if lower.endswith(ending) and len(lower) - len(ending) >= 4:
+            return lower[: len(lower) - len(ending)]
+    return lower
+
+
+def _expand_org_spans(
+    text: str,
+    spans: list[tuple[int, int, str, str]],
+) -> list[tuple[int, int, str, str]]:
+    """For every ORG span, find bare-name and inflected occurrences in text
+    and add them as additional spans with the same label.
+
+    E.g. if 'ООО "Рексофт"' is found, also matches 'Рексофт', 'Рексофта',
+    'Рексофту' etc. (stem-based, case-insensitive, whole-word boundary).
+    """
+    extra: list[tuple[int, int, str, str]] = []
+    existing_starts = {s[0] for s in spans}
+
+    org_spans = [s for s in spans if s[2] == "ОРГ"]
+    if not org_spans:
+        return spans
+
+    # Collect unique cores to avoid duplicate processing
+    seen_cores: set[str] = set()
+    for _, _, _, value in org_spans:
+        core = _extract_org_core(value)
+        if not core or core.lower() in seen_cores:
+            continue
+        seen_cores.add(core.lower())
+
+        stem = _org_stem(core)
+        if len(stem) < 4:
+            continue
+
+        # Match: stem followed by any Cyrillic letters (inflection) or end-of-word
+        pattern = r'(?<![\wа-яёА-ЯЁ])' + re.escape(stem) + r'[а-яёА-ЯЁA-Za-z]*(?![\wа-яёА-ЯЁA-Za-z])'
+        for m in re.finditer(pattern, text, flags=re.IGNORECASE):
+            if m.start() not in existing_starts:
+                extra.append((m.start(), m.end(), "ОРГ", m.group()))
+                existing_starts.add(m.start())
+
+    return spans + extra
 
 
 def _regex_entities(text: str) -> list[tuple[int, int, str, str]]:
@@ -126,6 +227,10 @@ def detect_entities(
         spans += _natasha_entities(text)
     if use_presidio:
         spans += _presidio_entities(text)
+
+    # Expand ORG spans to cover bare-name inflections (e.g. Рексофта, Рексофту)
+    spans = _expand_org_spans(text, spans)
+
     spans = _merge_spans(spans)
     if labels:
         spans = [s for s in spans if s[2] in labels]
