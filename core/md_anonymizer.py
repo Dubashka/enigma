@@ -1,7 +1,7 @@
 """MD text anonymization and restoration logic.
 
 Detects PII entities using Natasha (PER, ORG) + Presidio (email, phone, IP)
-+ regex (contract numbers, sums, dates, legal entities, person names) and replaces them with placeholders.
++ regex (contract numbers, sums, dates, legal entities, person names with initials).
 User-defined extra terms are masked after automatic detection.
 Mapping JSON allows full restoration.
 """
@@ -23,9 +23,9 @@ _ORG_CLOSE = r'[»"\']'
 _ORG_PREFIXES = ("ООО", "ОАО", "ЗАО", "АО", "ПАО", "ИП", "НКО", "ФГУП", "ГУП", "АНО")
 _ORG_PREFIX_RE = "|".join(_ORG_PREFIXES)
 
-# Cyrillic character classes (NO quantifier — add explicitly in each pattern)
-_C  = r'[А-ЯЁ]'          # one uppercase Cyrillic
-_cl = r'[а-яё]'          # one lowercase Cyrillic
+# Cyrillic helpers (no quantifier — add explicitly per pattern)
+_C  = r'[А-ЯЁ]'   # one uppercase Cyrillic letter
+_cl = r'[а-яё]'   # one lowercase Cyrillic letter
 
 _PATTERNS: list[tuple[str, str]] = [
     # Email — before phone to avoid partial overlap
@@ -34,7 +34,7 @@ _PATTERNS: list[tuple[str, str]] = [
     ("ТЕЛЕФОН", r"(?<!\d)(?:\+7|8)[\s\-]?\(?\d{3}\)?[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}(?!\d)"),
     # IPv4
     ("IP", r"\b(?:\d{1,3}\.){3}\d{1,3}\b"),
-    # Russian legal entities: ООО "Ромашка", АО Северсталь, ИП Иванов А.А. etc.
+    # Russian legal entities
     (
         "ОРГ",
         r"(?:" + _ORG_PREFIX_RE + r")"
@@ -43,8 +43,11 @@ _PATTERNS: list[tuple[str, str]] = [
         + r"|\s+[А-ЯЁ][а-яёА-ЯЁ\w\-]{1,40}(?:\s+[А-ЯЁ][а-яёА-ЯЁ\w\-]{1,40}){0,3}"
         + r")?",
     ),
-    # ---- Person name formats (ФИО) ----
-    # Format 1: Фамилия И.О.  or  Фамилия И.  e.g. Скорочкина А.А.
+    # ---- Person name formats (ФИО) — initials-only, high precision ----
+    #
+    # Format 1: Фамилия И.О.  e.g. Скорочкина А.А.
+    # Format 1b: Фамилия И.   e.g. Скорочкина А.
+    # A period after the last initial is required, trailing space/punctuation is NOT consumed.
     (
         "ФИО",
         _C + _cl + r"+\s+" + _C + r"\.(?:" + _C + r"\.)?",
@@ -54,15 +57,13 @@ _PATTERNS: list[tuple[str, str]] = [
         "ФИО",
         _C + r"\." + _C + r"\.\s+" + _C + _cl + r"+",
     ),
-    # Format 3: Full name Фамилия Имя [Отчество]  e.g. Иванов Иван Иванович
-    # Each word must be 3+ chars total (1 upper + 2+ lower) to avoid short word false positives
-    (
-        "ФИО",
-        _C + _cl + r"{2,}\s+" + _C + _cl + r"{2,}(?:\s+" + _C + _cl + r"{4,})?",
-    ),
-    # Contract / document numbers:  №12345  or  № 12345
+    # NOTE: Format 3 (full name without initials) is intentionally omitted —
+    # it produces too many false positives on common Russian phrases.
+    # Full names are detected by Natasha NER instead.
+    #
+    # Contract / document numbers
     ("ДОГОВОР", r"№\s?\d+[\-/\d]*"),
-    # Monetary sums: 1 500 000 руб. / 1500000 руб / 1 500 000,00 ₽
+    # Monetary sums
     ("СУММА", r"\d[\d\s]*(?:[.,]\d+)?\s*(?:руб(?:лей|\.)?|₽)"),
     # Dates: 15.03.2024 / 2024-03-15
     ("ДАТА", r"\b(?:\d{2}\.\d{2}\.\d{4}|\d{4}-\d{2}-\d{2})\b"),
@@ -70,43 +71,24 @@ _PATTERNS: list[tuple[str, str]] = [
 
 
 def _extract_org_core(org_value: str) -> str | None:
-    """Extract the bare company name from a full ORG match.
-
-    Examples:
-        'ООО "Рексофт"'  -> 'Рексофт'
-        "ООО 'Ромашка'" -> 'Ромашка'
-        'АО Северсталь'    -> 'Северсталь'
-        'ИП Иванов А.А.'    -> None  (person name, skip)
-    Returns None if no extractable core is found.
-    """
+    """Extract the bare company name from a full ORG match."""
     value = org_value.strip()
     for prefix in sorted(_ORG_PREFIXES, key=len, reverse=True):
         if value.upper().startswith(prefix):
             value = value[len(prefix):].strip()
             break
-
     if not value:
         return None
-
-    # Remove surrounding quotes
     value = re.sub(r'^[«"\']|[»"\']$', "", value).strip()
-
-    # Skip if looks like a person name (initials pattern: Word A.A.)
     if re.match(r'^[А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ]\.){1,2}\s*$', value):
         return None
-
     if re.match(r'^[А-ЯЁA-Z]', value) and len(value) >= 3:
         return value
-
     return None
 
 
 def _org_stem(name: str) -> str:
-    """Return the root stem to match inflected forms.
-
-    For Cyrillic words we strip common noun endings to get a stable root.
-    We require at least 4 chars in the stem to avoid over-matching short words.
-    """
+    """Return the root stem to match inflected forms."""
     endings = ["овой", "овый", "евой", "евый", "еской", "еский",
                "овое", "евое", "еское",
                "ами", "ах", "ом", "ой", "ого",
@@ -124,38 +106,30 @@ def _expand_org_spans(
     text: str,
     spans: list[tuple[int, int, str, str]],
 ) -> list[tuple[int, int, str, str]]:
-    """For every ORG span, find bare-name and inflected occurrences in text
-    and add them as additional spans with the same label.
-    """
+    """For every ORG span add inflected bare-name occurrences."""
     extra: list[tuple[int, int, str, str]] = []
     existing_starts = {s[0] for s in spans}
-
     org_spans = [s for s in spans if s[2] == "ОРГ"]
     if not org_spans:
         return spans
-
     seen_cores: set[str] = set()
     for _, _, _, value in org_spans:
         core = _extract_org_core(value)
         if not core or core.lower() in seen_cores:
             continue
         seen_cores.add(core.lower())
-
         stem = _org_stem(core)
         if len(stem) < 4:
             continue
-
         pattern = r'(?<![\wа-яёА-ЯЁ])' + re.escape(stem) + r'[а-яёА-ЯЁA-Za-z]*(?![\wа-яёА-ЯЁA-Za-z])'
         for m in re.finditer(pattern, text, flags=re.IGNORECASE):
             if m.start() not in existing_starts:
                 extra.append((m.start(), m.end(), "ОРГ", m.group()))
                 existing_starts.add(m.start())
-
     return spans + extra
 
 
 def _regex_entities(text: str) -> list[tuple[int, int, str, str]]:
-    """Return list of (start, end, label, value) from regex patterns."""
     found: list[tuple[int, int, str, str]] = []
     for label, pattern in _PATTERNS:
         for m in re.finditer(pattern, text, flags=re.IGNORECASE):
@@ -184,7 +158,6 @@ def _natasha_entities(text: str) -> list[tuple[int, int, str, str]]:
 
 
 def _presidio_entities(text: str) -> list[tuple[int, int, str, str]]:
-    """Return email / phone / IP spans from Presidio pattern recognizers."""
     try:
         from presidio_analyzer.predefined_recognizers import (
             EmailRecognizer, IpRecognizer, PhoneRecognizer,
@@ -205,7 +178,6 @@ def _presidio_entities(text: str) -> list[tuple[int, int, str, str]]:
 def _merge_spans(
     spans: list[tuple[int, int, str, str]]
 ) -> list[tuple[int, int, str, str]]:
-    """Sort spans and remove overlapping ones (keep longer span)."""
     spans = sorted(spans, key=lambda s: (s[0], -(s[1] - s[0])))
     merged: list[tuple[int, int, str, str]] = []
     last_end = -1
@@ -223,11 +195,7 @@ def detect_entities(
     use_regex: bool = True,
     labels: set[str] | None = None,
 ) -> list[tuple[int, int, str, str]]:
-    """Detect all PII entities in text.
-
-    Returns sorted, non-overlapping list of (start, end, label, value).
-    If `labels` is provided, only those entity types are returned.
-    """
+    """Detect all PII entities in text."""
     spans: list[tuple[int, int, str, str]] = []
     if use_regex:
         spans += _regex_entities(text)
@@ -235,7 +203,6 @@ def detect_entities(
         spans += _natasha_entities(text)
     if use_presidio:
         spans += _presidio_entities(text)
-
     spans = _expand_org_spans(text, spans)
     spans = _merge_spans(spans)
     if labels:
@@ -247,13 +214,10 @@ def anonymize(
     text: str,
     enabled_labels: set[str] | None = None,
 ) -> tuple[str, dict[str, dict[str, str]]]:
-    """Replace detected entities with placeholders."""
     spans = detect_entities(text, labels=enabled_labels)
-
     counters: dict[str, int] = {}
     mapping: dict[str, dict[str, str]] = {}
     value_cache: dict[str, str] = {}
-
     replacements: list[tuple[int, int, str]] = []
     for start, end, label, value in spans:
         if value in value_cache:
@@ -264,11 +228,9 @@ def anonymize(
             value_cache[value] = placeholder
             mapping.setdefault(label, {})[placeholder] = value
         replacements.append((start, end, placeholder))
-
     result = text
     for start, end, placeholder in sorted(replacements, key=lambda x: -x[0]):
         result = result[:start] + placeholder + result[end:]
-
     return result, mapping
 
 
@@ -277,10 +239,8 @@ def anonymize_extra_terms(
     terms: list[str],
     mapping: dict[str, dict[str, str]],
 ) -> tuple[str, dict[str, dict[str, str]]]:
-    """Replace user-defined extra terms with [СКРЫТО_N] placeholders."""
     counter = len(mapping.get("СКРЫТО", {}))
     value_cache: dict[str, str] = {}
-
     for term in terms:
         term = term.strip()
         if not term:
@@ -293,14 +253,11 @@ def anonymize_extra_terms(
             placeholder = f"[СКРЫТО_{counter}]"
             value_cache[term_lower] = placeholder
             mapping.setdefault("СКРЫТО", {})[placeholder] = term
-
         text = re.sub(re.escape(term), placeholder, text, flags=re.IGNORECASE)
-
     return text, mapping
 
 
 def restore(anonymized_text: str, mapping: dict[str, Any]) -> str:
-    """Replace placeholders back with original values using mapping JSON."""
     result = anonymized_text
     for label_dict in mapping.values():
         for placeholder, original in label_dict.items():
