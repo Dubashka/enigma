@@ -99,6 +99,18 @@ def _render_review() -> None:
                     unsafe_allow_html=True,
                 )
 
+    # ---------------------------------------------------------------------------
+    # Extra terms — user-defined words/phrases to mask in addition to auto-detected
+    # ---------------------------------------------------------------------------
+    st.markdown("---")
+    st.markdown("**Дополнительные слова и фразы для маскировки**")
+    st.text_area(
+        "Введите через запятую слова или фразы, которые нужно скрыть дополнительно",
+        key="md_extra_terms",
+        height=80,
+        placeholder="Проект Альфа, сервер БД, филиал №3",
+    )
+
     col_back, col_anon = st.columns([1, 1])
     with col_back:
         if st.button("Назад", use_container_width=True):
@@ -107,11 +119,17 @@ def _render_review() -> None:
     with col_anon:
         if st.button("Анонимизировать", type="primary", use_container_width=True):
             enabled = {l for l in ALL_LABELS if st.session_state.get(f"md_label_{l}", False)}
-            if not enabled:
-                st.warning("Выберите хотя бы один тип данных")
+            if not enabled and not st.session_state.get("md_extra_terms", "").strip():
+                st.warning("Выберите хотя бы один тип данных или введите дополнительные слова")
             else:
-                from core.md_anonymizer import anonymize
-                anon_text, mapping = anonymize(text, enabled_labels=enabled)
+                from core.md_anonymizer import anonymize, anonymize_extra_terms
+                anon_text, mapping = anonymize(text, enabled_labels=enabled if enabled else None)
+
+                raw_extra = st.session_state.get("md_extra_terms", "")
+                extra_terms = [t.strip() for t in raw_extra.split(",") if t.strip()]
+                if extra_terms:
+                    anon_text, mapping = anonymize_extra_terms(anon_text, extra_terms, mapping)
+
                 st.session_state[_ANON_TEXT] = anon_text
                 st.session_state[_MAPPING] = mapping
                 st.session_state[_STAGE] = _STAGE_RESULT
@@ -176,3 +194,4 @@ def _reset() -> None:
         st.session_state.pop(key, None)
     for label in ALL_LABELS:
         st.session_state.pop(f"md_label_{label}", None)
+    st.session_state.pop("md_extra_terms", None)

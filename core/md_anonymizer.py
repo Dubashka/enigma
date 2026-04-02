@@ -2,6 +2,7 @@
 
 Detects PII entities using Natasha (PER, ORG) + Presidio (email, phone, IP)
 + regex (contract numbers, sums, dates, legal entities) and replaces them with placeholders.
+User-defined extra terms are masked after automatic detection.
 Mapping JSON allows full restoration.
 """
 from __future__ import annotations
@@ -158,6 +159,45 @@ def anonymize(
         result = result[:start] + placeholder + result[end:]
 
     return result, mapping
+
+
+def anonymize_extra_terms(
+    text: str,
+    terms: list[str],
+    mapping: dict[str, dict[str, str]],
+) -> tuple[str, dict[str, dict[str, str]]]:
+    """Replace user-defined extra terms with [СКРЫТО_N] placeholders.
+
+    Matching is case-insensitive. Already-replaced placeholders are skipped.
+    Applied after main anonymize() to avoid conflicts with auto-detected entities.
+
+    Args:
+        text:    Text already processed by anonymize().
+        terms:   List of words/phrases provided by the user.
+        mapping: Existing mapping dict — will be mutated in place.
+
+    Returns:
+        (updated_text, updated_mapping)
+    """
+    counter = len(mapping.get("СКРЫТО", {}))
+    value_cache: dict[str, str] = {}  # lowercased term -> placeholder
+
+    for term in terms:
+        term = term.strip()
+        if not term:
+            continue
+        term_lower = term.lower()
+        if term_lower in value_cache:
+            placeholder = value_cache[term_lower]
+        else:
+            counter += 1
+            placeholder = f"[СКРЫТО_{counter}]"
+            value_cache[term_lower] = placeholder
+            mapping.setdefault("СКРЫТО", {})[placeholder] = term
+
+        text = re.sub(re.escape(term), placeholder, text, flags=re.IGNORECASE)
+
+    return text, mapping
 
 
 def restore(anonymized_text: str, mapping: dict[str, Any]) -> str:
