@@ -23,10 +23,9 @@ _ORG_CLOSE = r'[»"\']'
 _ORG_PREFIXES = ("ООО", "ОАО", "ЗАО", "АО", "ПАО", "ИП", "НКО", "ФГУП", "ГУП", "АНО")
 _ORG_PREFIX_RE = "|".join(_ORG_PREFIXES)
 
-# Cyrillic uppercase letter
-_CYR_UP = r'[А-ЯЁ]'
-# Cyrillic lowercase letters (1+)
-_CYR_LO = r'[а-яё]+'
+# Cyrillic character classes (NO quantifier — add explicitly in each pattern)
+_C  = r'[А-ЯЁ]'          # one uppercase Cyrillic
+_cl = r'[а-яё]'          # one lowercase Cyrillic
 
 _PATTERNS: list[tuple[str, str]] = [
     # Email — before phone to avoid partial overlap
@@ -48,18 +47,18 @@ _PATTERNS: list[tuple[str, str]] = [
     # Format 1: Фамилия И.О.  or  Фамилия И.  e.g. Скорочкина А.А.
     (
         "ФИО",
-        _CYR_UP + _CYR_LO + r"\s+" + _CYR_UP + r"\.(?:" + _CYR_UP + r"\.)?",
+        _C + _cl + r"+\s+" + _C + r"\.(?:" + _C + r"\.)?",
     ),
     # Format 2: И.О. Фамилия  e.g. А.А. Скорочкина
     (
         "ФИО",
-        _CYR_UP + r"\." + _CYR_UP + r"\.\s+" + _CYR_UP + _CYR_LO,
+        _C + r"\." + _C + r"\.\s+" + _C + _cl + r"+",
     ),
     # Format 3: Full name Фамилия Имя [Отчество]  e.g. Иванов Иван Иванович
-    # Require all words 3+ chars to avoid false positives on short common words
+    # Each word must be 3+ chars total (1 upper + 2+ lower) to avoid short word false positives
     (
         "ФИО",
-        _CYR_UP + _CYR_LO + r"{2,}\s+" + _CYR_UP + _CYR_LO + r"{2,}(?:\s+" + _CYR_UP + _CYR_LO + r"{4,})?",
+        _C + _cl + r"{2,}\s+" + _C + _cl + r"{2,}(?:\s+" + _C + _cl + r"{4,})?",
     ),
     # Contract / document numbers:  №12345  or  № 12345
     ("ДОГОВОР", r"№\s?\d+[\-/\d]*"),
@@ -237,9 +236,7 @@ def detect_entities(
     if use_presidio:
         spans += _presidio_entities(text)
 
-    # Expand ORG spans to cover bare-name inflections (e.g. Рексофта, Рексофту)
     spans = _expand_org_spans(text, spans)
-
     spans = _merge_spans(spans)
     if labels:
         spans = [s for s in spans if s[2] in labels]
@@ -250,12 +247,7 @@ def anonymize(
     text: str,
     enabled_labels: set[str] | None = None,
 ) -> tuple[str, dict[str, dict[str, str]]]:
-    """Replace detected entities with placeholders.
-
-    Returns:
-        anonymized_text: str
-        mapping: {label: {placeholder: original_value}}
-    """
+    """Replace detected entities with placeholders."""
     spans = detect_entities(text, labels=enabled_labels)
 
     counters: dict[str, int] = {}
@@ -285,11 +277,7 @@ def anonymize_extra_terms(
     terms: list[str],
     mapping: dict[str, dict[str, str]],
 ) -> tuple[str, dict[str, dict[str, str]]]:
-    """Replace user-defined extra terms with [СКРЫТО_N] placeholders.
-
-    Matching is case-insensitive. Already-replaced placeholders are skipped.
-    Applied after main anonymize() to avoid conflicts with auto-detected entities.
-    """
+    """Replace user-defined extra terms with [СКРЫТО_N] placeholders."""
     counter = len(mapping.get("СКРЫТО", {}))
     value_cache: dict[str, str] = {}
 
