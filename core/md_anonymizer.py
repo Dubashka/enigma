@@ -43,11 +43,8 @@ _PATTERNS: list[tuple[str, str]] = [
         + r"|\s+[А-ЯЁ][а-яёА-ЯЁ\w\-]{1,40}(?:\s+[А-ЯЁ][а-яёА-ЯЁ\w\-]{1,40}){0,3}"
         + r")?",
     ),
-    # ---- Person name formats (ФИО) — initials-only, high precision ----
-    #
-    # Format 1: Фамилия И.О.  e.g. Скорочкина А.А.
-    # Format 1b: Фамилия И.   e.g. Скорочкина А.
-    # A period after the last initial is required, trailing space/punctuation is NOT consumed.
+    # ---- Person name formats (ФИО) — initials-based, high precision ----
+    # Format 1: Фамилия И.О. / Фамилия И.  e.g. Скорочкина А.А.
     (
         "ФИО",
         _C + _cl + r"+\s+" + _C + r"\.(?:" + _C + r"\.)?",
@@ -57,9 +54,7 @@ _PATTERNS: list[tuple[str, str]] = [
         "ФИО",
         _C + r"\." + _C + r"\.\s+" + _C + _cl + r"+",
     ),
-    # NOTE: Format 3 (full name without initials) is intentionally omitted —
-    # it produces too many false positives on common Russian phrases.
-    # Full names are detected by Natasha NER instead.
+    # Full names without initials are handled by _natasha_entities_per_line() below.
     #
     # Contract / document numbers
     ("ДОГОВОР", r"№\s?\d+[\-/\d]*"),
@@ -68,6 +63,11 @@ _PATTERNS: list[tuple[str, str]] = [
     # Dates: 15.03.2024 / 2024-03-15
     ("ДАТА", r"\b(?:\d{2}\.\d{2}\.\d{4}|\d{4}-\d{2}-\d{2})\b"),
 ]
+
+# Sentinel prefix injected around each line when feeding to Natasha.
+# It provides grammatical context so the model recognises isolated names.
+_NER_PREFIX = "Работник "
+_NER_PREFIX_LEN = len(_NER_PREFIX)
 
 
 def _extract_org_core(org_value: str) -> str | None:
@@ -138,7 +138,7 @@ def _regex_entities(text: str) -> list[tuple[int, int, str, str]]:
 
 
 def _natasha_entities(text: str) -> list[tuple[int, int, str, str]]:
-    """Return PER and ORG spans from Natasha NER."""
+    """Run Natasha NER on full text (catches names inside sentences)."""
     try:
         from natasha import Segmenter, NewsEmbedding, NewsNERTagger, Doc
         seg = Segmenter()
@@ -155,6 +155,58 @@ def _natasha_entities(text: str) -> list[tuple[int, int, str, str]]:
         return result
     except Exception:
         return []
+
+
+def _natasha_entities_per_line(text: str) -> list[tuple[int, int, str, str]]:
+    """Run Natasha line-by-line with a context prefix to catch isolated full names.
+
+    Natasha misses names that appear without sentence context (e.g. in tables,
+    bullet lists, headings).  We prepend a neutral prefix (e.g. "Работник ")
+    so the model receives a grammatically plausible sentence and correctly tags PER.
+    Offsets are adjusted back to the original text positions.
+    """
+    try:
+        from natasha import Segmenter, NewsEmbedding, NewsNERTagger, Doc
+        seg = Segmenter()
+        emb = NewsEmbedding()
+        tagger = NewsNERTagger(emb)
+    except Exception:
+        return []
+
+    result: list[tuple[int, int, str, str]] = []
+    label_map = {"PER": "ФИО", "ORG": "ОРГ"}
+
+    line_offset = 0
+    for raw_line in text.split("\n"):
+        stripped = raw_line.strip()
+        # Only process lines that look like they could contain a standalone name:
+        # 2-4 Cyrillic words, each starting with uppercase, no digits.
+        if stripped and re.match(
+            r'^[А-ЯЁ][а-яёА-ЯЁ\-]+(?:\s+[А-ЯЁ][а-яёА-ЯЁ\-]+){1,3}$',
+            stripped
+        ):
+            probe = _NER_PREFIX + stripped
+            try:
+                doc = Doc(probe)
+                doc.segment(seg)
+                doc.tag_ner(tagger)
+                for span in doc.spans:
+                    if span.type not in label_map:
+                        continue
+                    # Ignore spans that cover the injected prefix itself
+                    if span.start < _NER_PREFIX_LEN:
+                        continue
+                    # Map position back: offset in probe → offset in original text
+                    orig_start = line_offset + (span.start - _NER_PREFIX_LEN)
+                    orig_end   = line_offset + (span.stop  - _NER_PREFIX_LEN)
+                    value = text[orig_start:orig_end]
+                    result.append((orig_start, orig_end, label_map[span.type], value))
+            except Exception:
+                pass
+
+        line_offset += len(raw_line) + 1  # +1 for the '\n'
+
+    return result
 
 
 def _presidio_entities(text: str) -> list[tuple[int, int, str, str]]:
@@ -201,6 +253,7 @@ def detect_entities(
         spans += _regex_entities(text)
     if use_natasha:
         spans += _natasha_entities(text)
+        spans += _natasha_entities_per_line(text)
     if use_presidio:
         spans += _presidio_entities(text)
     spans = _expand_org_spans(text, spans)
