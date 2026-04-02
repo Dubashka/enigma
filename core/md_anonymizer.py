@@ -14,6 +14,11 @@ from typing import Any
 # ---------------------------------------------------------------------------
 # Regex patterns for structured PII
 # ---------------------------------------------------------------------------
+
+# ORG opening/closing quote characters: « » " '
+_ORG_OPEN  = r'[«"\']'
+_ORG_CLOSE = r'[»"\']'
+
 _PATTERNS: list[tuple[str, str]] = [
     # Email — before phone to avoid partial overlap
     ("EMAIL", r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}"),
@@ -26,8 +31,10 @@ _PATTERNS: list[tuple[str, str]] = [
     (
         "ОРГ",
         r"(?:ООО|ОАО|ЗАО|АО|ПАО|ИП|НКО|ФГУП|ГУП|АНО)"
-        r"(?:\s+[«\""][А-ЯЁа-яёA-Za-z0-9][\w\s\-]*?[»\""]"
-        r"|\s+[А-ЯЁ][а-яёА-ЯЁ\w\-]{1,40}(?:\s+[А-ЯЁ][а-яёА-ЯЁ\w\-]{1,40}){0,3})?",
+        r"(?:"
+        r"\s+" + _ORG_OPEN + r"[А-ЯЁа-яёA-Za-z0-9][\w\s\-]*?" + _ORG_CLOSE
+        + r"|\s+[А-ЯЁ][а-яёА-ЯЁ\w\-]{1,40}(?:\s+[А-ЯЁ][а-яёА-ЯЁ\w\-]{1,40}){0,3}"
+        + r")?",
     ),
     # Contract / document numbers:  №12345  or  № 12345
     ("ДОГОВОР", r"№\s?\d+[\-/\d]*"),
