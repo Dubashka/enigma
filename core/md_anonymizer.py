@@ -1,7 +1,7 @@
 """MD text anonymization and restoration logic.
 
 Detects PII entities using Natasha (PER, ORG) + Presidio (email, phone, IP)
-+ regex (contract numbers, sums, dates, legal entities) and replaces them with placeholders.
++ regex (contract numbers, sums, dates, legal entities, person names) and replaces them with placeholders.
 User-defined extra terms are masked after automatic detection.
 Mapping JSON allows full restoration.
 """
@@ -23,6 +23,11 @@ _ORG_CLOSE = r'[»"\']'
 _ORG_PREFIXES = ("ООО", "ОАО", "ЗАО", "АО", "ПАО", "ИП", "НКО", "ФГУП", "ГУП", "АНО")
 _ORG_PREFIX_RE = "|".join(_ORG_PREFIXES)
 
+# Cyrillic uppercase letter
+_CYR_UP = r'[А-ЯЁ]'
+# Cyrillic lowercase letters (1+)
+_CYR_LO = r'[а-яё]+'
+
 _PATTERNS: list[tuple[str, str]] = [
     # Email — before phone to avoid partial overlap
     ("EMAIL", r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}"),
@@ -38,6 +43,23 @@ _PATTERNS: list[tuple[str, str]] = [
         r"\s+" + _ORG_OPEN + r"[А-ЯЁа-яёA-Za-z0-9][\w\s\-]*?" + _ORG_CLOSE
         + r"|\s+[А-ЯЁ][а-яёА-ЯЁ\w\-]{1,40}(?:\s+[А-ЯЁ][а-яёА-ЯЁ\w\-]{1,40}){0,3}"
         + r")?",
+    ),
+    # ---- Person name formats (ФИО) ----
+    # Format 1: Фамилия И.О.  or  Фамилия И.  e.g. Скорочкина А.А.
+    (
+        "ФИО",
+        _CYR_UP + _CYR_LO + r"\s+" + _CYR_UP + r"\.(?:" + _CYR_UP + r"\.)?",
+    ),
+    # Format 2: И.О. Фамилия  e.g. А.А. Скорочкина
+    (
+        "ФИО",
+        _CYR_UP + r"\." + _CYR_UP + r"\.\s+" + _CYR_UP + _CYR_LO,
+    ),
+    # Format 3: Full name Фамилия Имя [Отчество]  e.g. Иванов Иван Иванович
+    # Require all words 3+ chars to avoid false positives on short common words
+    (
+        "ФИО",
+        _CYR_UP + _CYR_LO + r"{2,}\s+" + _CYR_UP + _CYR_LO + r"{2,}(?:\s+" + _CYR_UP + _CYR_LO + r"{4,})?",
     ),
     # Contract / document numbers:  №12345  or  № 12345
     ("ДОГОВОР", r"№\s?\d+[\-/\d]*"),
@@ -58,7 +80,6 @@ def _extract_org_core(org_value: str) -> str | None:
         'ИП Иванов А.А.'    -> None  (person name, skip)
     Returns None if no extractable core is found.
     """
-    # Strip leading legal prefix
     value = org_value.strip()
     for prefix in sorted(_ORG_PREFIXES, key=len, reverse=True):
         if value.upper().startswith(prefix):
@@ -71,14 +92,11 @@ def _extract_org_core(org_value: str) -> str | None:
     # Remove surrounding quotes
     value = re.sub(r'^[«"\']|[»"\']$', "", value).strip()
 
-    # Skip if looks like a person name (initials pattern: Word A.A. or single short word)
-    if re.match(r'^[A-ЯЁ][a-яё]+(?:\s+[A-ЯЁ]\.){1,2}\s*$', value):
+    # Skip if looks like a person name (initials pattern: Word A.A.)
+    if re.match(r'^[А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ]\.){1,2}\s*$', value):
         return None
 
-    # Must start with a capital letter and be at least 3 chars
-    if re.match(r'^[A-ЯЁA-Z]', value) and len(value) >= 3:
-        # Return only the first word as the core (handles multi-word names like Северная Сталь)
-        # We keep the full name so all words are covered by the stem search
+    if re.match(r'^[А-ЯЁA-Z]', value) and len(value) >= 3:
         return value
 
     return None
@@ -88,18 +106,14 @@ def _org_stem(name: str) -> str:
     """Return the root stem to match inflected forms.
 
     For Cyrillic words we strip common noun endings to get a stable root.
-    Example: 'Рексофт' -> 'Рексофт'  (no ending to strip)
-             'Ромашка' -> 'Ромашк'   (strip -а)
-             'Газпром' -> 'Газпром'  (no ending)
     We require at least 4 chars in the stem to avoid over-matching short words.
     """
-    # Endings to strip (order matters — longer first)
     endings = ["овой", "овый", "евой", "евый", "еской", "еский",
                "овое", "евое", "еское",
                "ами", "ах", "ом", "ой", "ого",
                "ем", "ей", "его",
                "ю", "я", "е", "и", "у", "а"]
-    word = name.split()[0]  # use first word only for stemming
+    word = name.split()[0]
     lower = word.lower()
     for ending in endings:
         if lower.endswith(ending) and len(lower) - len(ending) >= 4:
@@ -113,9 +127,6 @@ def _expand_org_spans(
 ) -> list[tuple[int, int, str, str]]:
     """For every ORG span, find bare-name and inflected occurrences in text
     and add them as additional spans with the same label.
-
-    E.g. if 'ООО "Рексофт"' is found, also matches 'Рексофт', 'Рексофта',
-    'Рексофту' etc. (stem-based, case-insensitive, whole-word boundary).
     """
     extra: list[tuple[int, int, str, str]] = []
     existing_starts = {s[0] for s in spans}
@@ -124,7 +135,6 @@ def _expand_org_spans(
     if not org_spans:
         return spans
 
-    # Collect unique cores to avoid duplicate processing
     seen_cores: set[str] = set()
     for _, _, _, value in org_spans:
         core = _extract_org_core(value)
@@ -136,7 +146,6 @@ def _expand_org_spans(
         if len(stem) < 4:
             continue
 
-        # Match: stem followed by any Cyrillic letters (inflection) or end-of-word
         pattern = r'(?<![\wа-яёА-ЯЁ])' + re.escape(stem) + r'[а-яёА-ЯЁA-Za-z]*(?![\wа-яёА-ЯЁA-Za-z])'
         for m in re.finditer(pattern, text, flags=re.IGNORECASE):
             if m.start() not in existing_starts:
@@ -251,7 +260,6 @@ def anonymize(
 
     counters: dict[str, int] = {}
     mapping: dict[str, dict[str, str]] = {}
-    # value -> placeholder cache to reuse same placeholder for same value
     value_cache: dict[str, str] = {}
 
     replacements: list[tuple[int, int, str]] = []
@@ -265,7 +273,6 @@ def anonymize(
             mapping.setdefault(label, {})[placeholder] = value
         replacements.append((start, end, placeholder))
 
-    # Build anonymized text (process spans right-to-left to preserve indices)
     result = text
     for start, end, placeholder in sorted(replacements, key=lambda x: -x[0]):
         result = result[:start] + placeholder + result[end:]
@@ -282,17 +289,9 @@ def anonymize_extra_terms(
 
     Matching is case-insensitive. Already-replaced placeholders are skipped.
     Applied after main anonymize() to avoid conflicts with auto-detected entities.
-
-    Args:
-        text:    Text already processed by anonymize().
-        terms:   List of words/phrases provided by the user.
-        mapping: Existing mapping dict — will be mutated in place.
-
-    Returns:
-        (updated_text, updated_mapping)
     """
     counter = len(mapping.get("СКРЫТО", {}))
-    value_cache: dict[str, str] = {}  # lowercased term -> placeholder
+    value_cache: dict[str, str] = {}
 
     for term in terms:
         term = term.strip()
