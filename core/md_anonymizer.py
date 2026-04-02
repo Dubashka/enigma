@@ -30,7 +30,7 @@ _cl = r'[а-яё]'   # one lowercase Cyrillic letter
 # ---------------------------------------------------------------------------
 # Address building blocks
 # ---------------------------------------------------------------------------
-# Street-type keywords: ул., улица, пр., проспект, пер., наб., шоссе, пл., площадь, б-р, бульвар, проезд, тупик
+# Street-type keywords
 _STREET_KW = (
     r'(?:ул(?:\.|[и]ца)'
     r'|пр(?:\.|[о]спект)'
@@ -44,12 +44,13 @@ _STREET_KW = (
 )
 # Street name: 1-4 words (letters, digits, hyphens)
 _STREET_NAME = r'[А-ЯЁа-яё0-9][\wа-яёА-ЯЁ\-]*(?:\s+[А-ЯЁа-яё0-9][\wа-яёА-ЯЁ\-]*){0,3}'
-# House / building / office suffixes
-_HOUSE = r'(?:,?\s*д(?:\.|ом\.?)\s*\d+[\w\-/]*)'
-_BLDG  = r'(?:,?\s*(?:к(?:\.|орп\.?)|стр(?:\.)?)\s*\d+[\w\-/]*)'
-_FLAT  = r'(?:,?\s*(?:кв(?:\.|арт\.?)|оф(?:\.)?)\s*\d+)'
+# House / building / office suffixes (standalone, each wrapped in non-capturing group)
+_HOUSE      = r'(?:,?\s*д(?:\.|ом\.?)\s*\d+[\w\-/]*)'
+_HOUSE_BARE = r',?\s*д(?:\.|ом\.?)\s*\d+[\w\-/]*'   # same without outer (?:...)
+_BLDG       = r'(?:,?\s*(?:к(?:\.|орп\.?)|стр(?:\.)?)\s*\d+[\w\-/]*)'
+_FLAT       = r'(?:,?\s*(?:кв(?:\.|арт\.?)|оф(?:\.)?)\s*\d+)'
 # City/settlement prefixes
-_CITY_KW = r'(?:г(?:\.|[о]род)|п(?:\.|[о]с(?:\.|[е]лок))|с(?:\.|[е]ло)|д(?:\.|[е]ревня))'
+_CITY_KW   = r'(?:г(?:\.|[о]род)|п(?:\.|[о]с(?:\.|[е]лок))|с(?:\.|[е]ло)|д(?:\.|[е]ревня))'
 _CITY_NAME = r'[А-ЯЁ][а-яёА-ЯЁ\-]+(?:-[А-ЯЁ][а-яёА-ЯЁ\-]+)*'
 
 _PATTERNS: list[tuple[str, str]] = [
@@ -69,8 +70,7 @@ _PATTERNS: list[tuple[str, str]] = [
         + r")?",
     ),
     # ---- Person name formats (ФИО) — initials-based, high precision ----
-    # Format 1: Фамилия И.О.  e.g. Скорочкина А.А.
-    # Both initials are required (Фамилия И. without patronymic is NOT matched).
+    # Format 1: Фамилия И.О.  e.g. Скорочкина А.А. (both initials required)
     (
         "ФИО",
         _C + _cl + r"+\s+" + _C + r"\." + _C + r"\.",
@@ -84,12 +84,15 @@ _PATTERNS: list[tuple[str, str]] = [
     # Format A: г. Москва, ул. Ленина, д. 5[, кв. 12]
     (
         "АДРЕС",
-        _CITY_KW + r"\s+" + _CITY_NAME + r",\s*" + _STREET_KW + r"\s+" + _STREET_NAME + _HOUSE + r"?" + _BLDG + r"?" + _FLAT + r"?",
+        _CITY_KW + r"\s+" + _CITY_NAME + r",\s*"
+        + _STREET_KW + r"\s+" + _STREET_NAME
+        + _HOUSE + r"?" + _BLDG + r"?" + _FLAT + r"?",
     ),
     # Format B: ул. Ленина, д. 5[, к. 2][, кв. 12]  (no city prefix)
     (
         "АДРЕС",
-        _STREET_KW + r"\s+" + _STREET_NAME + r",\s*" + _HOUSE[len(r"(?:,?\s*"):],
+        _STREET_KW + r"\s+" + _STREET_NAME + r",\s*"
+        + _HOUSE_BARE + _BLDG + r"?" + _FLAT + r"?",
     ),
     # Postal index intentionally omitted — too many false positives.
     #
