@@ -69,10 +69,11 @@ _PATTERNS: list[tuple[str, str]] = [
         + r")?",
     ),
     # ---- Person name formats (ФИО) — initials-based, high precision ----
-    # Format 1: Фамилия И.О. / Фамилия И.  e.g. Скорочкина А.А.
+    # Format 1: Фамилия И.О.  e.g. Скорочкина А.А.
+    # Both initials are required (Фамилия И. without patronymic is NOT matched).
     (
         "ФИО",
-        _C + _cl + r"+\s+" + _C + r"\.(?:" + _C + r"\.)?",
+        _C + _cl + r"+\s+" + _C + r"\." + _C + r"\.",
     ),
     # Format 2: И.О. Фамилия  e.g. А.А. Скорочкина
     (
@@ -90,7 +91,7 @@ _PATTERNS: list[tuple[str, str]] = [
         "АДРЕС",
         _STREET_KW + r"\s+" + _STREET_NAME + r",\s*" + _HOUSE[len(r"(?:,?\s*"):],
     ),
-    # Postal index (Format C) intentionally omitted — too many false positives.
+    # Postal index intentionally omitted — too many false positives.
     #
     # Contract / document numbers
     ("ДОГОВОР", r"№\s?\d+[\-/\d]*"),
