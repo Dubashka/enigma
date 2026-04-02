@@ -188,15 +188,23 @@ def _is_fio_candidate(match_text: str) -> bool:
 
 def _is_short_line_match(text: str, match_start: int, match_end: int) -> bool:
     """Вернуть True, если совпадение занимает почти всю строку (2–3 слова подряд)."""
-    # Находим строку, в которой находится совпадение
     line_start = text.rfind("\n", 0, match_start)
     line_start = 0 if line_start == -1 else line_start + 1
     line_end = text.find("\n", match_end)
     line_end = len(text) if line_end == -1 else line_end
     line = text[line_start:line_end].strip()
-    # Совпадение должно совпадать с (обрезанной) строкой целиком или быть ею
     match_text = text[match_start:match_end]
     return line == match_text
+
+
+def _all_words_capitalized(text: str) -> bool:
+    """Вернуть True, если каждое слово начинается с заглавной буквы.
+
+    Имена и фамилии всегда начинаются с заглавной.
+    Прилагательные и существительные (приоритетным, направлениям) — строчные.
+    """
+    words = text.split()
+    return all(w[0].isupper() for w in words if w)
 
 
 # Sentinel prefix injected around each line when feeding to Natasha.
@@ -319,6 +327,15 @@ def _natasha_entities_per_line(text: str) -> list[tuple[int, int, str, str]]:
             r'^[А-ЯЁ][а-яёА-ЯЁ\-]+(?:\s+[А-ЯЁ][а-яёА-ЯЁ\-]+){1,3}$',
             stripped
         ):
+            # Гард  1: каждое слово должно начинаться с заглавной буквы
+            # (отсекает «приоритетным продуктовым направлениям» и подобные строки)
+            if not _all_words_capitalized(stripped):
+                line_offset += len(raw_line) + 1
+                continue
+            # Гард 2: стоп-список топонимов и служебных слов
+            if not _is_fio_candidate(stripped):
+                line_offset += len(raw_line) + 1
+                continue
             probe = _NER_PREFIX + stripped
             try:
                 doc = Doc(probe)
