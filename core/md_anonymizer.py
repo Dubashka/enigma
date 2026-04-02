@@ -1,7 +1,7 @@
 """MD text anonymization and restoration logic.
 
 Detects PII entities using Natasha (PER, ORG) + Presidio (email, phone, IP)
-+ regex (contract numbers, sums, dates, legal entities, person names with initials).
++ regex (contract numbers, sums, dates, legal entities, person names with initials, addresses).
 User-defined extra terms are masked after automatic detection.
 Mapping JSON allows full restoration.
 """
@@ -26,6 +26,31 @@ _ORG_PREFIX_RE = "|".join(_ORG_PREFIXES)
 # Cyrillic helpers (no quantifier — add explicitly per pattern)
 _C  = r'[А-ЯЁ]'   # one uppercase Cyrillic letter
 _cl = r'[а-яё]'   # one lowercase Cyrillic letter
+
+# ---------------------------------------------------------------------------
+# Address building blocks
+# ---------------------------------------------------------------------------
+# Street-type keywords: ул., улица, пр., проспект, пер., наб., шоссе, пл., площадь, б-р, бульвар, проезд, тупик
+_STREET_KW = (
+    r'(?:ул(?:\.|ица)'
+    r'|пр(?:\.|оспект)'
+    r'|пер(?:\.|еулок)'
+    r'|наб(?:\.|ережная)'
+    r'|шоссе'
+    r'|пл(?:\.|ощадь)'
+    r'|б(?:-р|ульвар)'
+    r'|проезд'
+    r'|тупик)'
+)
+# Street name: 1-4 words (letters, digits, hyphens)
+_STREET_NAME = r'[А-ЯЁа-яё0-9][\wа-яёА-ЯЁ\-]*(?:\s+[А-ЯЁа-яё0-9][\wа-яёА-ЯЁ\-]*){0,3}'
+# House / building / office suffixes
+_HOUSE = r'(?:,?\s*д(?:\.|ом\.?)\s*\d+[\w\-/]*)'
+_BLDG  = r'(?:,?\s*(?:к(?:\.|орп\.?)|стр(?:\.)?)\s*\d+[\w\-/]*)'
+_FLAT  = r'(?:,?\s*(?:кв(?:\.|арт\.?)|оф(?:\.)?)\s*\d+)'
+# City/settlement prefixes
+_CITY_KW = r'(?:г(?:\.|ород)|п(?:\.|ос(?:\.|елок))|с(?:\.|ело)|д(?:\.|еревня))'
+_CITY_NAME = r'[А-ЯЁ][а-яёА-ЯЁ\-]+(?:-[А-ЯЁ][а-яёА-ЯЁ\-]+)*'
 
 _PATTERNS: list[tuple[str, str]] = [
     # Email — before phone to avoid partial overlap
@@ -54,8 +79,22 @@ _PATTERNS: list[tuple[str, str]] = [
         "ФИО",
         _C + r"\." + _C + r"\.\s+" + _C + _cl + r"+",
     ),
-    # Full names without initials are handled by _natasha_entities_per_line() below.
-    #
+    # ---- Address patterns (АДРЕС) ----
+    # Format A: г. Москва, ул. Ленина, д. 5[, кв. 12]
+    (
+        "АДРЕС",
+        _CITY_KW + r"\s+" + _CITY_NAME + r",\s*" + _STREET_KW + r"\s+" + _STREET_NAME + _HOUSE + r"?" + _BLDG + r"?" + _FLAT + r"?",
+    ),
+    # Format B: ул. Ленина, д. 5[, к. 2][, кв. 12]  (no city prefix)
+    (
+        "АДРЕС",
+        _STREET_KW + r"\s+" + _STREET_NAME + r",\s*" + _HOUSE[len(r"(?:,?\s*"):] ,
+    ),
+    # Format C: Russian postal index standalone: 6 digits starting with 1-9
+    (
+        "АДРЕС",
+        r"\b[1-9]\d{5}\b",
+    ),
     # Contract / document numbers
     ("ДОГОВОР", r"№\s?\d+[\-/\d]*"),
     # Monetary sums
@@ -65,7 +104,6 @@ _PATTERNS: list[tuple[str, str]] = [
 ]
 
 # Sentinel prefix injected around each line when feeding to Natasha.
-# It provides grammatical context so the model recognises isolated names.
 _NER_PREFIX = "Работник "
 _NER_PREFIX_LEN = len(_NER_PREFIX)
 
@@ -158,13 +196,7 @@ def _natasha_entities(text: str) -> list[tuple[int, int, str, str]]:
 
 
 def _natasha_entities_per_line(text: str) -> list[tuple[int, int, str, str]]:
-    """Run Natasha line-by-line with a context prefix to catch isolated full names.
-
-    Natasha misses names that appear without sentence context (e.g. in tables,
-    bullet lists, headings).  We prepend a neutral prefix (e.g. "Работник ")
-    so the model receives a grammatically plausible sentence and correctly tags PER.
-    Offsets are adjusted back to the original text positions.
-    """
+    """Run Natasha line-by-line with a context prefix to catch isolated full names."""
     try:
         from natasha import Segmenter, NewsEmbedding, NewsNERTagger, Doc
         seg = Segmenter()
@@ -179,8 +211,6 @@ def _natasha_entities_per_line(text: str) -> list[tuple[int, int, str, str]]:
     line_offset = 0
     for raw_line in text.split("\n"):
         stripped = raw_line.strip()
-        # Only process lines that look like they could contain a standalone name:
-        # 2-4 Cyrillic words, each starting with uppercase, no digits.
         if stripped and re.match(
             r'^[А-ЯЁ][а-яёА-ЯЁ\-]+(?:\s+[А-ЯЁ][а-яёА-ЯЁ\-]+){1,3}$',
             stripped
@@ -193,10 +223,8 @@ def _natasha_entities_per_line(text: str) -> list[tuple[int, int, str, str]]:
                 for span in doc.spans:
                     if span.type not in label_map:
                         continue
-                    # Ignore spans that cover the injected prefix itself
                     if span.start < _NER_PREFIX_LEN:
                         continue
-                    # Map position back: offset in probe → offset in original text
                     orig_start = line_offset + (span.start - _NER_PREFIX_LEN)
                     orig_end   = line_offset + (span.stop  - _NER_PREFIX_LEN)
                     value = text[orig_start:orig_end]
@@ -204,7 +232,7 @@ def _natasha_entities_per_line(text: str) -> list[tuple[int, int, str, str]]:
             except Exception:
                 pass
 
-        line_offset += len(raw_line) + 1  # +1 for the '\n'
+        line_offset += len(raw_line) + 1
 
     return result
 
