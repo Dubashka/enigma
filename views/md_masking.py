@@ -15,7 +15,7 @@ _ANON_TEXT   = "md_mask_anon_text"
 _MAPPING     = "md_mask_mapping"
 _ENTITIES    = "md_mask_entities"
 
-ALL_LABELS = ["ФИО", "ОРГ", "EMAIL", "ТЕЛЕФОН", "IP", "ДОГОВОР", "СУММА", "ДАТА"]
+ALL_LABELS = ["ФИО", "ОРГ", "EMAIL", "ТЕЛЕФОН", "IP", "ДОГОВОР", "СУММА", "ДАТА", "АДРЕС"]
 
 LABEL_DESCRIPTIONS = {
     "ФИО": "Имена и фамилии людей",
@@ -26,6 +26,7 @@ LABEL_DESCRIPTIONS = {
     "ДОГОВОР": "Номера договоров и документов",
     "СУММА": "Денежные суммы",
     "ДАТА": "Даты",
+    "АДРЕС": "Физические адреса",
 }
 
 
@@ -103,7 +104,7 @@ def _render_review() -> None:
     # Extra terms — user-defined words/phrases to mask in addition to auto-detected
     # ---------------------------------------------------------------------------
     st.markdown("---")
-    st.markdown("**Дополнительные слова и фразы для маскировки**")
+    st.markdown("Дополнительные слова и фразы для маскировки")
     st.text_area(
         "Введите через запятую слова или фразы, которые нужно скрыть дополнительно",
         key="md_extra_terms",
@@ -150,7 +151,7 @@ def _render_result() -> None:
     for i, (label, items) in enumerate(mapping.items()):
         cols[i % len(cols)].metric(label, len(items))
 
-    st.markdown("**Превью (первые 1000 символов)**")
+    st.markdown("Превью (первые 1000 символов)")
     st.code(anon_text[:1000] + ("…" if len(anon_text) > 1000 else ""), language="markdown")
 
     st.warning("⚠️ Не забудьте скачать маппинг (.json) для дальнейшего восстановления")
