@@ -1,7 +1,7 @@
 """MD text anonymization and restoration logic.
 
 Detects PII entities using Natasha (PER, ORG) + Presidio (email, phone, IP)
-+ regex (contract numbers, sums, dates, legal entities, person names with initials, addresses).
++ regex (contract numbers, dates, legal entities, person names with initials, addresses).
 User-defined extra terms are masked after automatic detection.
 Mapping JSON allows full restoration.
 """
@@ -16,8 +16,8 @@ from typing import Any
 # ---------------------------------------------------------------------------
 
 # ORG opening/closing quote characters: « » " '
-_ORG_OPEN  = r'[«"\']'
-_ORG_CLOSE = r'[»"\']'
+_ORG_OPEN  = r'[«"\'']'
+_ORG_CLOSE = r'[»"\'']'
 
 # Legal-form prefixes used to detect org names
 _ORG_PREFIXES = ("ООО", "ОАО", "ЗАО", "АО", "ПАО", "ИП", "НКО", "ФГУП", "ГУП", "АНО")
@@ -98,8 +98,6 @@ _PATTERNS: list[tuple[str, str]] = [
     #
     # Contract / document numbers
     ("ДОГОВОР", r"№\s?\d+[\-/\d]*"),
-    # Monetary sums
-    ("СУММА", r"\d[\d\s]*(?:[.,]\d+)?\s*(?:руб(?:лей|\.)?|₽)"),
     # Dates: 15.03.2024 / 2024-03-15
     ("ДАТА", r"\b(?:\d{2}\.\d{2}\.\d{4}|\d{4}-\d{2}-\d{2})\b"),
 ]
@@ -118,7 +116,7 @@ def _extract_org_core(org_value: str) -> str | None:
             break
     if not value:
         return None
-    value = re.sub(r'^[«"\']|[»"\']$', "", value).strip()
+    value = re.sub(r'^[«"\'']|[»"\'']$', "", value).strip()
     if re.match(r'^[А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ]\.){1,2}\s*$', value):
         return None
     if re.match(r'^[А-ЯЁA-Z]', value) and len(value) >= 3:
