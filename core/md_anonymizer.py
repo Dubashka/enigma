@@ -1,7 +1,7 @@
 """MD text anonymization and restoration logic.
 
 Detects PII entities using Natasha (PER, ORG) + Presidio (email, phone, IP)
-+ regex (contract numbers, sums, dates) and replaces them with placeholders.
++ regex (contract numbers, sums, dates, legal entities) and replaces them with placeholders.
 Mapping JSON allows full restoration.
 """
 from __future__ import annotations
@@ -17,9 +17,17 @@ _PATTERNS: list[tuple[str, str]] = [
     # Email — before phone to avoid partial overlap
     ("EMAIL", r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}"),
     # Russian mobile / landline phones
-    ("ТЕЛЕФОН", r"(?:\+7|8)[\s\-]?\(?\d{3}\)?[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}"),
+    ("ТЕЛЕФОН", r"(?<!\d)(?:\+7|8)[\s\-]?\(?\d{3}\)?[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}(?!\d)"),
     # IPv4
     ("IP", r"\b(?:\d{1,3}\.){3}\d{1,3}\b"),
+    # Russian legal entities: ООО "Ромашка", АО Северсталь, ИП Иванов А.А. etc.
+    # Covers: ООО ОАО ЗАО АО ПАО ИП НКО ФГУП ГУП АНО followed by quoted or capitalized name
+    (
+        "ОРГ",
+        r"(?:ООО|ОАО|ЗАО|АО|ПАО|ИП|НКО|ФГУП|ГУП|АНО)"
+        r"(?:\s+[«\""][А-ЯЁа-яёA-Za-z0-9][\w\s\-]*?[»\""]"
+        r"|\s+[А-ЯЁ][а-яёА-ЯЁ\w\-]{1,40}(?:\s+[А-ЯЁ][а-яёА-ЯЁ\w\-]{1,40}){0,3})?",
+    ),
     # Contract / document numbers:  №12345  or  № 12345
     ("ДОГОВОР", r"№\s?\d+[\-/\d]*"),
     # Monetary sums: 1 500 000 руб. / 1500000 руб / 1 500 000,00 ₽
@@ -104,12 +112,12 @@ def detect_entities(
     If `labels` is provided, only those entity types are returned.
     """
     spans: list[tuple[int, int, str, str]] = []
+    if use_regex:
+        spans += _regex_entities(text)
     if use_natasha:
         spans += _natasha_entities(text)
     if use_presidio:
         spans += _presidio_entities(text)
-    if use_regex:
-        spans += _regex_entities(text)
     spans = _merge_spans(spans)
     if labels:
         spans = [s for s in spans if s[2] in labels]
