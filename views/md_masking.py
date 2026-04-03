@@ -1,6 +1,10 @@
-"""MD anonymization view — Step 1: upload, Step 2: review entities, Step 3: download.
+"""MD anonymization view — Step 1: upload (any format), Step 2: review, Step 3: download.
 
-Ollama AI NER запускается вручную кнопкой на шаге 2 — аналогично Excel-маскированию.
+Поддерживаемые форматы на входе: .md, .txt, .pdf, .docx, .doc, .pptx, .odt
+Формат на выходе: .md (Markdown)
+
+PDF-скан → Tesseract OCR, остальные → markitdown.
+Ollama AI NER запускается вручную кнопкой на шаге 2.
 """
 from __future__ import annotations
 
@@ -13,12 +17,35 @@ _STAGE_REVIEW  = "review"
 _STAGE_RESULT  = "result"
 
 _FILE_NAME   = "md_mask_file_name"
-_FILE_TEXT   = "md_mask_file_text"
+_FILE_TEXT   = "md_mask_file_text"    # уже сконвертированный MD-текст
 _ANON_TEXT   = "md_mask_anon_text"
 _MAPPING     = "md_mask_mapping"
 _ENTITIES    = "md_mask_entities"
-_AI_DONE     = "md_mask_ai_done"   # флаг: Ollama уже отработала
-_AI_DELTA    = "md_mask_ai_delta"  # количество новых сущностей от Ollama
+_AI_DONE     = "md_mask_ai_done"
+_AI_DELTA    = "md_mask_ai_delta"
+_CONV_WARN   = "md_mask_conv_warn"    # предупреждение от конвертера (OCR и т.п.)
+
+# Форматы, принимаемые file_uploader
+_ACCEPTED_TYPES = ["md", "txt", "pdf", "docx", "doc", "pptx", "odt"]
+
+# Человекочитаемые названия форматов (для подсказки в UI)
+_TYPE_LABELS = {
+    "md":   "Markdown",
+    "txt":  "Текст (TXT)",
+    "pdf":  "PDF документ",
+    "docx": "Word документ",
+    "doc":  "Word документ (старый формат)",
+    "pptx": "PowerPoint презентация",
+    "odt":  "OpenDocument текст",
+}
+
+_FILE_EMOJI = {
+    "md":   "📄", "txt": "📄",
+    "pdf":  "📑",
+    "docx": "📝", "doc": "📝",
+    "pptx": "📊",
+    "odt":  "📄",
+}
 
 ALL_LABELS = ["ФИО", "ОРГ", "EMAIL", "ТЕЛЕФОН", "IP", "ДОГОВОР", "СУММА", "ДАТА", "АДРЕС",
               "ПАСПОРТ", "СНИЛС", "ИНН", "КПП"]
@@ -39,9 +66,15 @@ LABEL_DESCRIPTIONS = {
     "КПП":     "КПП организации",
 }
 
+_LANG_OPTIONS = {
+    "Русский + Английский": "rus+eng",
+    "Только русский":       "rus",
+    "Только английский":    "eng",
+}
+
 
 def render() -> None:
-    st.header("Маскирование MD")
+    st.header("Маскирование документов")
     stage = st.session_state.get(_STAGE, _STAGE_UPLOAD)
     if stage == _STAGE_UPLOAD:
         _render_upload()
@@ -52,34 +85,97 @@ def render() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Шаг 1 — загрузка файла
+# Шаг 1 — загрузка и конвертация
 # ---------------------------------------------------------------------------
 
 def _render_upload() -> None:
     render_steps(current=1, steps=STEPS_MD_MASK)
-    st.subheader("Загрузите MD-файл")
+    st.subheader("Загрузите документ")
+    st.caption(
+        "Поддерживаются: "
+        + ", ".join(f"**{ext.upper()}**" for ext in _ACCEPTED_TYPES)
+        + " — результат маскирования всегда в формате **.md**"
+    )
 
-    uploaded = st.file_uploader(" ", type=["md", "txt"], key="md_mask_uploader")
+    uploaded = st.file_uploader(" ", type=_ACCEPTED_TYPES, key="md_mask_uploader")
 
-    if uploaded is not None:
-        text = uploaded.read().decode("utf-8", errors="replace")
-        st.session_state[_FILE_NAME] = uploaded.name
-        st.session_state[_FILE_TEXT] = text
+    if uploaded is None:
+        return
 
-        # Базовое детектирование: Natasha + Presidio + regex (без Ollama)
-        with st.spinner("Ищем чувствительные данные в тексте…"):
+    ext = uploaded.name.rsplit(".", 1)[-1].lower() if "." in uploaded.name else ""
+    is_pdf = ext == "pdf"
+
+    # --- PDF-опции: OCR ---
+    force_ocr = False
+    ocr_lang  = "rus+eng"
+    if is_pdf:
+        st.markdown("---")
+        st.markdown("**Параметры PDF**")
+        force_ocr = st.checkbox(
+            "Сканированный PDF (использовать Tesseract OCR)",
+            value=False,
+            help=(
+                "Включите, если PDF является сканом без выделяемого текста. "
+                "Иначе текст извлекается быстро через markitdown без запуска OCR."
+            ),
+        )
+        if force_ocr:
+            lang_label = st.selectbox(
+                "Язык распознавания",
+                options=list(_LANG_OPTIONS.keys()),
+                index=0,
+            )
+            ocr_lang = _LANG_OPTIONS[lang_label]
+            st.info("⏰ OCR может занять несколько минут на большой документ.")
+
+    st.markdown("---")
+    if st.button("Загрузить и анализировать", type="primary", use_container_width=True):
+        file_bytes = uploaded.read()
+
+        # --- Конвертация ---
+        needs_conversion = ext not in ("md", "txt")
+        if needs_conversion:
+            label = _TYPE_LABELS.get(ext, ext.upper())
+            with st.spinner(f"Конвертируем {label} в Markdown…"):
+                try:
+                    from core.converter import file_to_markdown
+                    text, conv_warning = file_to_markdown(
+                        file_bytes,
+                        uploaded.name,
+                        ocr_lang=ocr_lang,
+                        force_ocr=force_ocr,
+                    )
+                except RuntimeError as err:
+                    st.error(f"❌ Не удалось конвертировать файл: {err}")
+                    return
+        else:
+            text = file_bytes.decode("utf-8", errors="replace")
+            conv_warning = None
+
+        if not text.strip():
+            st.error(
+                "Документ не содержит текста или не удалось его извлечь. "
+                "Попробуйте включить OCR (если PDF-скан) или проверьте файл."
+            )
+            return
+
+        # --- Детектирование ---
+        with st.spinner("Ищем чувствительные данные…"):
             from core.md_anonymizer import detect_entities
             entities = detect_entities(text)
 
-        st.session_state[_ENTITIES] = entities
-        st.session_state[_AI_DONE]  = False
-        st.session_state[_AI_DELTA] = 0
-        st.session_state[_STAGE]    = _STAGE_REVIEW
+        st.session_state[_FILE_NAME] = uploaded.name
+        st.session_state[_FILE_TEXT] = text
+        st.session_state[_ENTITIES]  = entities
+        st.session_state[_AI_DONE]   = False
+        st.session_state[_AI_DELTA]  = 0
+        st.session_state[_CONV_WARN] = conv_warning
+        st.session_state[_STAGE]     = _STAGE_REVIEW
         st.rerun()
 
 
 # ---------------------------------------------------------------------------
-# Шаг 2 — просмотр сущностей + опциональный запуск Ollama
+# Шаг 2 — просмотр и редактирование сущностей
 # ---------------------------------------------------------------------------
 
 def _render_review() -> None:
@@ -89,10 +185,24 @@ def _render_review() -> None:
     file_name = st.session_state.get(_FILE_NAME, "файл")
     ai_done   = st.session_state.get(_AI_DONE, False)
     ai_delta  = st.session_state.get(_AI_DELTA, 0)
+    conv_warn = st.session_state.get(_CONV_WARN)
+
+    # --- Инфо о конвертации ---
+    ext = file_name.rsplit(".", 1)[-1].lower() if "." in file_name else ""
+    if ext not in ("md", "txt"):
+        emoji = _FILE_EMOJI.get(ext, "📄")
+        label = _TYPE_LABELS.get(ext, ext.upper())
+        st.info(
+            f"{emoji} Файл **{file_name}** ({label}) был сконвертирован в Markdown "
+            "перед анализом. Результат маскирования будет в формате **.md**.",
+            icon="ℹ️",
+        )
+    if conv_warn:
+        st.warning(f"⚠️ {conv_warn}")
 
     st.subheader(f"Найденные чувствительные данные: {file_name}")
 
-    # --- Блок Ollama --------------------------------------------------------
+    # --- Блок Ollama ---
     st.markdown("---")
     ai_col1, ai_col2 = st.columns([2, 3])
     with ai_col1:
@@ -102,10 +212,11 @@ def _render_review() -> None:
             disabled=ai_done,
             use_container_width=True,
             key="btn_ollama",
-            help="Запустить локальную LLM (Ollama) для поиска дополнительных сущностей. "
-                 "Требует запущенного Ollama на localhost:11434.",
+            help=(
+                "Запустить локальную LLM (Ollama) для поиска дополнительных сущностей. "
+                "Требует запущенного Ollama на localhost:11434."
+            ),
         )
-
     with ai_col2:
         if ai_done:
             msg = (
@@ -117,20 +228,17 @@ def _render_review() -> None:
         else:
             st.info(
                 "Базовое сканирование выполнено (Natasha + Presidio + regex). "
-                "Нажмите кнопку слева, чтобы запустить Ollama для поиска "
-                "сущностей, которые базовые методы могли пропустить.",
+                "Нажмите кнопку слева, чтобы запустить Ollama.",
                 icon="ℹ️",
             )
 
-    # Обработка нажатия — ПОСЛЕ рендера обоих столбцов,
-    # чтобы st.spinner не ломал layout
     if clicked and not ai_done:
         _run_ollama_and_merge(text)
         st.rerun()
 
     st.markdown("---")
 
-    # --- Отображение найденных сущностей ------------------------------------
+    # --- Список сущностей ---
     by_label: dict[str, list[str]] = {}
     for _, _, label, value in entities:
         by_label.setdefault(label, [])
@@ -161,17 +269,17 @@ def _render_review() -> None:
                     unsafe_allow_html=True,
                 )
 
-    # --- Дополнительные термины ---------------------------------------------
+    # --- Доп. термины ---
     st.markdown("---")
     st.markdown("Дополнительные слова и фразы для маскировки")
     st.text_area(
-        "Введите через запятую слова или фразы, которые нужно скрыть дополнительно",
+        "Введите через запятую",
         key="md_extra_terms",
         height=80,
         placeholder="Проект Альфа, сервер БД, филиал №3",
     )
 
-    # --- Кнопки навигации ---------------------------------------------------
+    # --- Навигация ---
     col_back, col_anon = st.columns([1, 1])
     with col_back:
         if st.button("Назад", use_container_width=True):
@@ -189,7 +297,6 @@ def _render_review() -> None:
                     enabled_labels=enabled if enabled else None,
                     predetected_entities=st.session_state.get(_ENTITIES),
                 )
-
                 raw_extra = st.session_state.get("md_extra_terms", "")
                 extra_terms = [t.strip() for t in raw_extra.split(",") if t.strip()]
                 if extra_terms:
@@ -202,16 +309,11 @@ def _render_review() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Вспомогательная функция: запуск Ollama и обогащение списка сущностей
+# Ollama helper
 # ---------------------------------------------------------------------------
 
 def _run_ollama_and_merge(text: str) -> None:
-    """Запустить Ollama, смержить результат с базовыми сущностями.
-
-    Исключения пробрасываются через st.error() — состояние не теряется.
-    """
     from core.ai_ner import AINer, merge_entity_lists, OllamaUnavailableError, OllamaParseError
-
     base_entities = st.session_state.get(_ENTITIES, [])
     base_count    = len(base_entities)
 
@@ -229,7 +331,7 @@ def _run_ollama_and_merge(text: str) -> None:
         except OllamaParseError as exc:
             st.error(
                 f"**Ollama вернула некорректный ответ.**\n\n{exc}\n\n"
-                "Попробуйте снова или используйте другую модель (ENIGMA_OLLAMA_MODEL).",
+                "Попробуйте снова или используйте другую модель.",
                 icon="🟠",
             )
             return
@@ -238,11 +340,9 @@ def _run_ollama_and_merge(text: str) -> None:
             return
 
     merged = merge_entity_lists(base_entities, ai_entities)
-    delta  = len(merged) - base_count
-
     st.session_state[_ENTITIES] = merged
     st.session_state[_AI_DONE]  = True
-    st.session_state[_AI_DELTA] = delta
+    st.session_state[_AI_DELTA] = len(merged) - base_count
 
 
 # ---------------------------------------------------------------------------
@@ -254,15 +354,17 @@ def _render_result() -> None:
     anon_text = st.session_state[_ANON_TEXT]
     mapping   = st.session_state[_MAPPING]
     file_name = st.session_state.get(_FILE_NAME, "файл")
+    # Имя выходного файла всегда .md независимо от входного формата
     base = file_name.rsplit(".", 1)[0] if "." in file_name else file_name
 
     st.subheader("Результат маскирования")
 
-    cols = st.columns(len(mapping) if mapping else 1)
+    # --- Метрики ---
+    cols = st.columns(max(len(mapping), 1))
     for i, (label, items) in enumerate(mapping.items()):
         cols[i % len(cols)].metric(label, len(items))
 
-    st.markdown("Превью (первые 1000 символов)")
+    st.markdown("**Превью (первые 1000 символов)**")
     st.code(anon_text[:1000] + ("…" if len(anon_text) > 1000 else ""), language="markdown")
 
     st.warning("⚠️ Не забудьте скачать маппинг (.json) для дальнейшего демаскирования")
@@ -291,8 +393,8 @@ def _render_result() -> None:
     col_back, col_reset = st.columns([1, 1])
     with col_back:
         if st.button("Назад к выбору сущностей", use_container_width=True):
-            st.session_state.pop(_ANON_TEXT, None)
-            st.session_state.pop(_MAPPING, None)
+            for k in [_ANON_TEXT, _MAPPING]:
+                st.session_state.pop(k, None)
             st.session_state[_STAGE] = _STAGE_REVIEW
             st.rerun()
     with col_reset:
@@ -303,7 +405,7 @@ def _render_result() -> None:
 
 def _reset() -> None:
     for key in [_STAGE, _FILE_NAME, _FILE_TEXT, _ANON_TEXT, _MAPPING,
-                _ENTITIES, _AI_DONE, _AI_DELTA]:
+                _ENTITIES, _AI_DONE, _AI_DELTA, _CONV_WARN]:
         st.session_state.pop(key, None)
     for label in ALL_LABELS:
         st.session_state.pop(f"md_label_{label}", None)
