@@ -14,7 +14,7 @@ _RESTORED     = "md_decr_restored"
 
 
 def render() -> None:
-    st.header("Восстановление MD")
+    st.header("Демаскирование MD")
     stage = st.session_state.get(_STAGE, _STAGE_UPLOAD)
     if stage == _STAGE_UPLOAD:
         _render_upload()
@@ -29,7 +29,7 @@ def _render_upload() -> None:
     col_md, col_json = st.columns(2)
     with col_md:
         uploaded_md = st.file_uploader(
-            "Анонимизированный MD-файл",
+            "Маскриванный MD-файл",
             type=["md", "txt"],
             key="md_decr_md_uploader",
         )
@@ -63,7 +63,7 @@ def _render_result() -> None:
     if base.endswith("_anon"):
         base = base[:-5]
 
-    st.subheader("Результат восстановления")
+    st.subheader("Результат демаскирования")
 
     col1, col2, col3 = st.columns(3)
     col1.metric("Строк", f"{len(restored.splitlines()):,}")
