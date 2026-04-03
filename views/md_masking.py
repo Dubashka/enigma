@@ -4,7 +4,7 @@
 Формат на выходе: .md (Markdown)
 
 PDF-скан → Tesseract OCR, остальные → markitdown.
-Ollama AI NER запускается вручную кнопкой на шаге 2.
+Ollama AI NER — в разработке, запуск временно заблокирован.
 """
 from __future__ import annotations
 
@@ -24,6 +24,9 @@ _ENTITIES    = "md_mask_entities"
 _AI_DONE     = "md_mask_ai_done"
 _AI_DELTA    = "md_mask_ai_delta"
 _CONV_WARN   = "md_mask_conv_warn"    # предупреждение от конвертера (OCR и т.п.)
+
+# Флаг: True = блок Ollama виден, False = скрыт за expander «в разработке»
+_OLLAMA_ENABLED = False
 
 # Форматы, принимаемые file_uploader
 _ACCEPTED_TYPES = ["md", "txt", "pdf", "docx", "doc", "pptx", "odt"]
@@ -183,8 +186,6 @@ def _render_review() -> None:
     text      = st.session_state[_FILE_TEXT]
     entities  = st.session_state[_ENTITIES]
     file_name = st.session_state.get(_FILE_NAME, "файл")
-    ai_done   = st.session_state.get(_AI_DONE, False)
-    ai_delta  = st.session_state.get(_AI_DELTA, 0)
     conv_warn = st.session_state.get(_CONV_WARN)
 
     # --- Инфо о конвертации ---
@@ -202,39 +203,26 @@ def _render_review() -> None:
 
     st.subheader(f"Найденные чувствительные данные: {file_name}")
 
-    # --- Блок Ollama ---
-    st.markdown("---")
-    ai_col1, ai_col2 = st.columns([2, 3])
-    with ai_col1:
-        btn_label = "✅ Ollama уже применена" if ai_done else "🤖 Уточнить через Ollama"
-        clicked = st.button(
-            btn_label,
-            disabled=ai_done,
-            use_container_width=True,
-            key="btn_ollama",
-            help=(
-                "Запустить локальную LLM (Ollama) для поиска дополнительных сущностей. "
-                "Требует запущенного Ollama на localhost:11434."
-            ),
-        )
-    with ai_col2:
-        if ai_done:
-            msg = (
-                f"Ollama нашла **{ai_delta}** новых сущностей — список обновлён."
-                if ai_delta else
-                "Ollama завершила анализ. Новых сущностей сверх базовых не найдено."
-            )
-            st.success(msg, icon="✅")
-        else:
+    # -------------------------------------------------------------------
+    # Блок Ollama — скрыт за expander, пока функция в разработке
+    # Чтобы разблокировать, поставьте _OLLAMA_ENABLED = True в начале файла
+    # -------------------------------------------------------------------
+    if _OLLAMA_ENABLED:
+        _render_ollama_block(text)
+    else:
+        with st.expander("🚧 Уточнить через Ollama (в разработке)", expanded=False):
             st.info(
-                "Базовое сканирование выполнено (Natasha + Presidio + regex). "
-                "Нажмите кнопку слева, чтобы запустить Ollama.",
+                "🛠️ Эта функция ещё в разработке и будет доступна в ближайшем обновлении.\n\n"
+                "Позволит запустить локальную LLM-модель (Ollama) для поиска дополнительных сущностей, "
+                "которые не были найдены базовым сканированием (Natasha + Presidio + regex).",
                 icon="ℹ️",
             )
-
-    if clicked and not ai_done:
-        _run_ollama_and_merge(text)
-        st.rerun()
+            st.button(
+                "🤖 Уточнить через Ollama",
+                disabled=True,
+                use_container_width=True,
+                help="Функция в разработке — недоступна",
+            )
 
     st.markdown("---")
 
@@ -306,6 +294,50 @@ def _render_review() -> None:
                 st.session_state[_MAPPING]   = mapping
                 st.session_state[_STAGE]     = _STAGE_RESULT
                 st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# Ollama block (используется только при _OLLAMA_ENABLED = True)
+# ---------------------------------------------------------------------------
+
+def _render_ollama_block(text: str) -> None:
+    ai_done  = st.session_state.get(_AI_DONE, False)
+    ai_delta = st.session_state.get(_AI_DELTA, 0)
+
+    st.markdown("---")
+    ai_col1, ai_col2 = st.columns([2, 3])
+    with ai_col1:
+        btn_label = "✅ Ollama уже применена" if ai_done else "🤖 Уточнить через Ollama"
+        clicked = st.button(
+            btn_label,
+            disabled=ai_done,
+            use_container_width=True,
+            key="btn_ollama",
+            help=(
+                "Запустить локальную LLM (Ollama) для поиска дополнительных сущностей. "
+                "Требует запущенного Ollama на localhost:11434."
+            ),
+        )
+    with ai_col2:
+        if ai_done:
+            msg = (
+                f"Ollama нашла **{ai_delta}** новых сущностей — список обновлён."
+                if ai_delta else
+                "Ollama завершила анализ. Новых сущностей сверх базовых не найдено."
+            )
+            st.success(msg, icon="✅")
+        else:
+            st.info(
+                "Базовое сканирование выполнено (Natasha + Presidio + regex). "
+                "Нажмите кнопку слева, чтобы запустить Ollama.",
+                icon="ℹ️",
+            )
+
+    if clicked and not ai_done:
+        _run_ollama_and_merge(text)
+        st.rerun()
+
+    st.markdown("---")
 
 
 # ---------------------------------------------------------------------------
