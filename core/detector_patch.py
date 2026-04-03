@@ -1,15 +1,15 @@
 """
-Постфильтр для Natasha PER-кандидатов и инструкция интеграции AINer.
+Постфильтр для PER-кандидатов Natasha.
 
-Скопируйте natasha_postfilter и связанные импорты в существующий detector.py.
-См. раздел «Интеграция AINer» в конце файла.
+natasha_postfilter() работает с потоком кортежей:
+    (start: int, end: int, label: str, value: str)
 
-ВАЖНО: не заменяет существующую логику — дополняет её.
+Это нативный формат detect_entities() / _regex_entities() / _natasha_entities().
+Не требует адаптера — подключается напрямую в md_anonymizer.detect_entities().
 """
 
 from __future__ import annotations
 import logging
-from typing import Sequence
 
 try:
     import pymorphy2  # type: ignore
@@ -36,44 +36,43 @@ def _is_common_word(token: str) -> bool:
         return True
 
     if _PYMORPHY_AVAILABLE and _morph is not None:
-        parses = _morph.parse(t)
-        for p in parses:
+        for p in _morph.parse(t):
             pos = p.tag.POS
             if pos in _COMMON_POS:
                 grammemes = p.tag.grammemes
+                # Если pymorphy2 не пометил слово граммемой имени собственного
                 if not any(g in grammemes for g in _PROPER_ANIMACY):
                     return True
     return False
 
 
+# Метки, которые фильтруем
+_PERSON_LABELS = {"ФИО", "PER", "person"}
+
+
 def natasha_postfilter(
-    candidates: list[dict],
-    label_key: str = "label",
-    text_key:  str = "text",
-) -> list[dict]:
+    candidates: list[tuple],
+) -> list[tuple]:
     """
-    Постфильтр для кандидатов типа PER из Natasha.
+    Постфильтр для потока кортежей (start, end, label, value).
 
-    Отклоняет кандидата если ВСЕ токены — нарицательные слова.
-    Остальные кандидаты пропускаются без изменений.
+    Отклоняет PER/ФИО-кандидата, если:
+      - ВСЕ токены присутствуют в COMMON_WORDS или GEO_STOPWORDS, ИЛИ
+      - pymorphy2 определяет все токены как нарицательные
+        (без граммем Name/Patr/Surn).
 
-    Параметры
-    ----------
-    candidates : список словарей сущностей (из Natasha)
-    label_key  : ключ метки ('label' или 'type' — зависит от вашей структуры)
-    text_key   : ключ текста сущности
-
-    Возвращает отфильтрованный список.
+    Все остальные метки (ORG, EMAIL и т.д.) пропускаются без изменений.
     """
     filtered = []
     for ent in candidates:
-        label = ent.get(label_key, "")
-        if label not in ("PER", "person", "ФИО"):
+        # Кортеж имеет формат (start, end, label, value)
+        label = ent[2]
+        if label not in _PERSON_LABELS:
             filtered.append(ent)
             continue
 
-        entity_text = ent.get(text_key, "")
-        tokens = entity_text.split()
+        value = ent[3]
+        tokens = value.split()
 
         if not tokens:
             filtered.append(ent)
@@ -82,31 +81,9 @@ def natasha_postfilter(
         if all(_is_common_word(tok) for tok in tokens):
             logger.info(
                 "Postfilter: отклонён PER '%s' — все токены нарицательные",
-                entity_text,
+                value,
             )
         else:
             filtered.append(ent)
 
     return filtered
-
-
-# ---------------------------------------------------------------------------
-# Интеграция AINer в detector.py
-# ---------------------------------------------------------------------------
-# Добавьте в DetectorClass.__init__:
-#
-#   from core.ai_ner import AINer
-#   self._ai_ner = AINer()  # читает ENIGMA_AI_NER_MODE из окружения
-#
-# В методе detect/analyze после сбора base_entities:
-#
-#   from core.ai_ner import merge_entity_lists
-#   from core.detector_patch import natasha_postfilter
-#   from core.patterns import find_all_russian_personal_data
-#
-#   base_entities = natasha_postfilter(base_entities)
-#   base_entities += find_all_russian_personal_data(text)
-#   ai_entities = self._ai_ner.extract(text)
-#   base_entities = merge_entity_lists(base_entities, ai_entities)
-#
-# Обратная совместимость обеспечена — при mode="off" ai_entities = [].
