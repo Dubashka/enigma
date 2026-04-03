@@ -1,4 +1,7 @@
-"""MD anonymization view — Step 1: upload, Step 2: review entities, Step 3: download."""
+"""MD anonymization view — Step 1: upload, Step 2: review entities, Step 3: download.
+
+Ollama AI NER запускается вручную кнопкой на шаге 2 — аналогично Excel-маскированию.
+"""
 from __future__ import annotations
 
 import streamlit as st
@@ -14,19 +17,25 @@ _FILE_TEXT   = "md_mask_file_text"
 _ANON_TEXT   = "md_mask_anon_text"
 _MAPPING     = "md_mask_mapping"
 _ENTITIES    = "md_mask_entities"
+_AI_DONE     = "md_mask_ai_done"   # флаг: Ollama уже отработала
 
-ALL_LABELS = ["ФИО", "ОРГ", "EMAIL", "ТЕЛЕФОН", "IP", "ДОГОВОР", "СУММА", "ДАТА", "АДРЕС"]
+ALL_LABELS = ["ФИО", "ОРГ", "EMAIL", "ТЕЛЕФОН", "IP", "ДОГОВОР", "СУММА", "ДАТА", "АДРЕС",
+              "ПАСПОРТ", "СНИЛС", "ИНН", "КПП"]
 
 LABEL_DESCRIPTIONS = {
-    "ФИО": "Имена и фамилии людей",
-    "ОРГ": "Названия организаций",
-    "EMAIL": "Адреса электронной почты",
+    "ФИО":     "Имена и фамилии людей",
+    "ОРГ":     "Названия организаций",
+    "EMAIL":   "Адреса электронной почты",
     "ТЕЛЕФОН": "Номера телефонов",
-    "IP": "IP-адреса",
+    "IP":      "IP-адреса",
     "ДОГОВОР": "Номера договоров и документов",
-    "СУММА": "Денежные суммы",
-    "ДАТА": "Даты",
-    "АДРЕС": "Физические адреса",
+    "СУММА":   "Денежные суммы",
+    "ДАТА":    "Даты",
+    "АДРЕС":   "Физические адреса",
+    "ПАСПОРТ": "Паспортные данные (серия + номер)",
+    "СНИЛС":   "СНИЛС",
+    "ИНН":     "ИНН физического или юридического лица",
+    "КПП":     "КПП организации",
 }
 
 
@@ -41,6 +50,10 @@ def render() -> None:
         _render_result()
 
 
+# ---------------------------------------------------------------------------
+# Шаг 1 — загрузка файла
+# ---------------------------------------------------------------------------
+
 def _render_upload() -> None:
     render_steps(current=1, steps=STEPS_MD_MASK)
     st.subheader("Загрузите MD-файл")
@@ -52,24 +65,63 @@ def _render_upload() -> None:
         st.session_state[_FILE_NAME] = uploaded.name
         st.session_state[_FILE_TEXT] = text
 
+        # Базовое детектирование: Natasha + Presidio + regex (без Ollama)
         with st.spinner("Ищем чувствительные данные в тексте…"):
             from core.md_anonymizer import detect_entities
             entities = detect_entities(text)
 
         st.session_state[_ENTITIES] = entities
+        st.session_state[_AI_DONE] = False
         st.session_state[_STAGE] = _STAGE_REVIEW
         st.rerun()
 
 
+# ---------------------------------------------------------------------------
+# Шаг 2 — просмотр сущностей + опциональный запуск Ollama
+# ---------------------------------------------------------------------------
+
 def _render_review() -> None:
     render_steps(current=2, steps=STEPS_MD_MASK)
-    text = st.session_state[_FILE_TEXT]
+    text     = st.session_state[_FILE_TEXT]
     entities = st.session_state[_ENTITIES]
     file_name = st.session_state.get(_FILE_NAME, "файл")
+    ai_done  = st.session_state.get(_AI_DONE, False)
 
     st.subheader(f"Найденные чувствительные данные: {file_name}")
 
-    # Group entities by label for display
+    # --- Кнопка Ollama (аналог кнопки AI-проверки в Excel) -----------------
+    st.markdown("---")
+    ai_col1, ai_col2 = st.columns([2, 3])
+    with ai_col1:
+        ollama_disabled = ai_done
+        btn_label = "✅ Ollama уже применена" if ai_done else "🤖 Уточнить через Ollama"
+        if st.button(
+            btn_label,
+            disabled=ollama_disabled,
+            use_container_width=True,
+            help="Запустить локальную LLM (Ollama) для поиска дополнительных сущностей. "
+                 "Требует запущенного Ollama на localhost:11434.",
+        ):
+            _run_ollama(text)
+            entities = st.session_state[_ENTITIES]   # обновлённый список
+            st.rerun()
+
+    with ai_col2:
+        if ai_done:
+            st.success(
+                "Ollama нашла дополнительные сущности — список обновлён.",
+                icon="✅",
+            )
+        else:
+            st.info(
+                "Базовое сканирование выполнено (Natasha + Presidio + regex). "
+                "Нажмите кнопку слева, чтобы запустить Ollama для поиска "
+                "сущностей, которые базовые методы могли пропустить.",
+                icon="ℹ️",
+            )
+    st.markdown("---")
+
+    # --- Отображение найденных сущностей ------------------------------------
     by_label: dict[str, list[str]] = {}
     for _, _, label, value in entities:
         by_label.setdefault(label, [])
@@ -100,9 +152,7 @@ def _render_review() -> None:
                     unsafe_allow_html=True,
                 )
 
-    # ---------------------------------------------------------------------------
-    # Extra terms — user-defined words/phrases to mask in addition to auto-detected
-    # ---------------------------------------------------------------------------
+    # --- Дополнительные термины ---------------------------------------------
     st.markdown("---")
     st.markdown("Дополнительные слова и фразы для маскировки")
     st.text_area(
@@ -112,6 +162,7 @@ def _render_review() -> None:
         placeholder="Проект Альфа, сервер БД, филиал №3",
     )
 
+    # --- Кнопки навигации ---------------------------------------------------
     col_back, col_anon = st.columns([1, 1])
     with col_back:
         if st.button("Назад", use_container_width=True):
@@ -124,7 +175,12 @@ def _render_review() -> None:
                 st.warning("Выберите хотя бы один тип данных или введите дополнительные слова")
             else:
                 from core.md_anonymizer import anonymize, anonymize_extra_terms
-                anon_text, mapping = anonymize(text, enabled_labels=enabled if enabled else None)
+                anon_text, mapping = anonymize(
+                    text,
+                    enabled_labels=enabled if enabled else None,
+                    # передаём уже обогащённые сущности, чтобы не запускать детектирование повторно
+                    predetected_entities=st.session_state.get(_ENTITIES),
+                )
 
                 raw_extra = st.session_state.get("md_extra_terms", "")
                 extra_terms = [t.strip() for t in raw_extra.split(",") if t.strip()]
@@ -137,16 +193,42 @@ def _render_review() -> None:
                 st.rerun()
 
 
+# ---------------------------------------------------------------------------
+# Вспомогательная функция: запуск Ollama и обогащение списка сущностей
+# ---------------------------------------------------------------------------
+
+def _run_ollama(text: str) -> None:
+    """Запустить Ollama, смержить результат с базовыми сущностями."""
+    with st.spinner("Ollama анализирует текст… Это может занять 15–60 секунд."):
+        try:
+            from core.ai_ner import AINer, merge_entity_lists
+            ner = AINer(mode="ollama")
+            ai_entities = ner.extract(text)
+            base_entities = st.session_state.get(_ENTITIES, [])
+            merged = merge_entity_lists(base_entities, ai_entities)
+            st.session_state[_ENTITIES] = merged
+            st.session_state[_AI_DONE] = True
+        except Exception as exc:
+            st.error(
+                f"Ollama недоступна или вернула ошибку: {exc}\n\n"
+                "Убедитесь, что Ollama запущена (`ollama serve`) и модель загружена "
+                "(`ollama pull qwen2.5:7b`)."
+            )
+
+
+# ---------------------------------------------------------------------------
+# Шаг 3 — результат
+# ---------------------------------------------------------------------------
+
 def _render_result() -> None:
     render_steps(current=3, steps=STEPS_MD_MASK)
     anon_text = st.session_state[_ANON_TEXT]
-    mapping = st.session_state[_MAPPING]
+    mapping   = st.session_state[_MAPPING]
     file_name = st.session_state.get(_FILE_NAME, "файл")
     base = file_name.rsplit(".", 1)[0] if "." in file_name else file_name
 
     st.subheader("Результат маскирования")
 
-    total = sum(len(v) for v in mapping.values())
     cols = st.columns(len(mapping) if mapping else 1)
     for i, (label, items) in enumerate(mapping.items()):
         cols[i % len(cols)].metric(label, len(items))
@@ -191,7 +273,7 @@ def _render_result() -> None:
 
 
 def _reset() -> None:
-    for key in [_STAGE, _FILE_NAME, _FILE_TEXT, _ANON_TEXT, _MAPPING, _ENTITIES]:
+    for key in [_STAGE, _FILE_NAME, _FILE_TEXT, _ANON_TEXT, _MAPPING, _ENTITIES, _AI_DONE]:
         st.session_state.pop(key, None)
     for label in ALL_LABELS:
         st.session_state.pop(f"md_label_{label}", None)
