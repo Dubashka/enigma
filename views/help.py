@@ -47,39 +47,10 @@ def render() -> None:
         """
     )
 
-    st.subheader("⚙️ Установка Tesseract (для OCR)")
-    st.markdown(
-        """
-        OCR-функция требует наличия **Tesseract** на сервере/машине, где запущен сервис.
-        Установите его одним из способов:
-
-        **Linux (Ubuntu / Debian):**
-        ```bash
-        sudo apt install tesseract-ocr tesseract-ocr-rus
-        ```
-
-        **macOS (Homebrew):**
-        ```bash
-        brew install tesseract
-        brew install tesseract-lang  # все языки, включая русский
-        ```
-
-        **Windows:**
-        Скачайте установщик с [github.com/UB-Mannheim/tesseract](https://github.com/UB-Mannheim/tesseract/wiki)
-        и добавьте путь к `tesseract.exe` в системную переменную `PATH`.
-        Языковой пакет для русского: выберите `rus` в процессе установки.
-
-        После установки проверьте, что Tesseract доступен:
-        ```bash
-        tesseract --version
-        ```
-        """
-    )
-
     st.divider()
 
-    st.markdown(
-        """
-        **Есть вопросы?** Пишите: [ilya.mukha@reksoft.com](mailto:ilya.mukha@reksoft.com)
-        """
-    )
+ #   st.markdown(
+  #      """
+  #      **Есть вопросы?** Пишите: [ilya.mukha@reksoft.com](mailto:ilya.mukha@reksoft.com)
+   #     """
+  #  )
