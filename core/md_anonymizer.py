@@ -300,8 +300,14 @@ def _natasha_entities(text: str) -> list[tuple[int, int, str, str]]:
         label_map = {"PER": "ФИО", "ORG": "ОРГ"}
         result = []
         for span in doc.spans:
-            if span.type in label_map:
-                result.append((span.start, span.stop, label_map[span.type], text[span.start:span.stop]))
+            if span.type not in label_map:
+                continue
+            value = text[span.start:span.stop]
+            # Постфильтр для ФИО: если хотя бы одно слово строчное —
+            # это не имя (напр.: «приоритетным продуктовым направлениям»)
+            if span.type == "PER" and not _all_words_capitalized(value):
+                continue
+            result.append((span.start, span.stop, label_map[span.type], value))
         return result
     except Exception:
         return []
@@ -327,8 +333,7 @@ def _natasha_entities_per_line(text: str) -> list[tuple[int, int, str, str]]:
             r'^[А-ЯЁ][а-яёА-ЯЁ\-]+(?:\s+[А-ЯЁ][а-яёА-ЯЁ\-]+){1,3}$',
             stripped
         ):
-            # Гард  1: каждое слово должно начинаться с заглавной буквы
-            # (отсекает «приоритетным продуктовым направлениям» и подобные строки)
+            # Гард 1: каждое слово должно начинаться с заглавной буквы
             if not _all_words_capitalized(stripped):
                 line_offset += len(raw_line) + 1
                 continue
