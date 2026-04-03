@@ -31,7 +31,7 @@ LABEL_DESCRIPTIONS = {
 
 
 def render() -> None:
-    st.header("Анонимизация MD")
+    st.header("Маскирование MD")
     stage = st.session_state.get(_STAGE, _STAGE_UPLOAD)
     if stage == _STAGE_UPLOAD:
         _render_upload()
@@ -52,7 +52,7 @@ def _render_upload() -> None:
         st.session_state[_FILE_NAME] = uploaded.name
         st.session_state[_FILE_TEXT] = text
 
-        with st.spinner("Ищем персональные данные в тексте…"):
+        with st.spinner("Ищем чувствительные данные в тексте…"):
             from core.md_anonymizer import detect_entities
             entities = detect_entities(text)
 
@@ -67,7 +67,7 @@ def _render_review() -> None:
     entities = st.session_state[_ENTITIES]
     file_name = st.session_state.get(_FILE_NAME, "файл")
 
-    st.subheader(f"Найденные сущности: {file_name}")
+    st.subheader(f"Найденные чувствительные данные: {file_name}")
 
     # Group entities by label for display
     by_label: dict[str, list[str]] = {}
@@ -77,9 +77,9 @@ def _render_review() -> None:
             by_label[label].append(value)
 
     if not by_label:
-        st.info("Персональные данные в файле не обнаружены. Можно скачать файл без изменений.")
+        st.info("Чувствительные данные в файле не обнаружены. Можно скачать файл без изменений.")
     else:
-        st.markdown("Выберите типы данных для анонимизации:")
+        st.markdown("Выберите типы данных для маскирования:")
         for label in ALL_LABELS:
             if label not in by_label:
                 continue
@@ -118,7 +118,7 @@ def _render_review() -> None:
             _reset()
             st.rerun()
     with col_anon:
-        if st.button("Анонимизировать", type="primary", use_container_width=True):
+        if st.button("Маскировать", type="primary", use_container_width=True):
             enabled = {l for l in ALL_LABELS if st.session_state.get(f"md_label_{l}", False)}
             if not enabled and not st.session_state.get("md_extra_terms", "").strip():
                 st.warning("Выберите хотя бы один тип данных или введите дополнительные слова")
@@ -144,7 +144,7 @@ def _render_result() -> None:
     file_name = st.session_state.get(_FILE_NAME, "файл")
     base = file_name.rsplit(".", 1)[0] if "." in file_name else file_name
 
-    st.subheader("Результат анонимизации")
+    st.subheader("Результат маскирования")
 
     total = sum(len(v) for v in mapping.values())
     cols = st.columns(len(mapping) if mapping else 1)
@@ -154,12 +154,12 @@ def _render_result() -> None:
     st.markdown("Превью (первые 1000 символов)")
     st.code(anon_text[:1000] + ("…" if len(anon_text) > 1000 else ""), language="markdown")
 
-    st.warning("⚠️ Не забудьте скачать маппинг (.json) для дальнейшего восстановления")
+    st.warning("⚠️ Не забудьте скачать маппинг (.json) для дальнейшего демаскирования")
 
     col1, col2 = st.columns(2)
     with col1:
         st.download_button(
-            label="Анонимизированный .md",
+            label="Маскированный .md",
             data=anon_text.encode("utf-8"),
             file_name=f"{base}_anon.md",
             mime="text/markdown",
