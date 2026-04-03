@@ -24,10 +24,10 @@ import tempfile
 
 # Форматы, требующие конвертации
 CONVERTIBLE_TYPES = ["pdf", "docx", "doc", "pptx", "odt"]
-# Форматы, принимаемые напрямую
-PASST_THROUGH_TYPES = ["md", "txt"]
+# Форматы, принимаемые напрямую (без конвертации)
+PASSTHROUGH_TYPES = ["md", "txt"]
 # Все допустимые расширения для file_uploader
-ACCEPTED_TYPES = PASSTTHROUGH_TYPES + CONVERTIBLE_TYPES
+ACCEPTED_TYPES = PASSTHROUGH_TYPES + CONVERTIBLE_TYPES
 
 # Порог: если markitdown вернул меньше символов — считаем скан
 _SCAN_THRESHOLD = 50
@@ -56,7 +56,7 @@ def file_to_markdown(
     ext = _get_ext(file_name)
 
     # --- Passthrough: MD и TXT ---
-    if ext in PASSTTHROUGH_TYPES:
+    if ext in PASSTHROUGH_TYPES:
         text = file_bytes.decode("utf-8", errors="replace")
         return text, None
 
