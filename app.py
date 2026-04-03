@@ -16,7 +16,7 @@ else:
 st.sidebar.markdown("** **")
 page = st.sidebar.radio(
     "Режим",
-    ["Маскирование Excel/CSV", "Демаскирование Excel/CSV", "Конвертация в MD", "Маскирование MD", "Демаскирование MD", "Помощь"],
+    ["Маскирование Excel/CSV", "Демаскирование Excel/CSV", "Конвертация в MD", "Маскирование текстовых файлов", "Демаскирование текстовых файлов", "Помощь"],
     label_visibility="collapsed",
 )
 
@@ -29,10 +29,10 @@ elif page == "Демаскирование Excel/CSV":
 elif page == "Конвертация в MD":
     from views.pdf_to_md import render
     render()
-elif page == "Маскирование MD":
+elif page == "Маскирование текстовых файлов":
     from views.md_masking import render
     render()
-elif page == "Демаскирование MD":
+elif page == "Демаскирование текстовых файлов":
     from views.md_decryption import render
     render()
 elif page == "Помощь":
