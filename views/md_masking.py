@@ -18,6 +18,7 @@ _ANON_TEXT   = "md_mask_anon_text"
 _MAPPING     = "md_mask_mapping"
 _ENTITIES    = "md_mask_entities"
 _AI_DONE     = "md_mask_ai_done"   # флаг: Ollama уже отработала
+_AI_DELTA    = "md_mask_ai_delta"  # количество новых сущностей от Ollama
 
 ALL_LABELS = ["ФИО", "ОРГ", "EMAIL", "ТЕЛЕФОН", "IP", "ДОГОВОР", "СУММА", "ДАТА", "АДРЕС",
               "ПАСПОРТ", "СНИЛС", "ИНН", "КПП"]
@@ -71,8 +72,9 @@ def _render_upload() -> None:
             entities = detect_entities(text)
 
         st.session_state[_ENTITIES] = entities
-        st.session_state[_AI_DONE] = False
-        st.session_state[_STAGE] = _STAGE_REVIEW
+        st.session_state[_AI_DONE]  = False
+        st.session_state[_AI_DELTA] = 0
+        st.session_state[_STAGE]    = _STAGE_REVIEW
         st.rerun()
 
 
@@ -82,36 +84,36 @@ def _render_upload() -> None:
 
 def _render_review() -> None:
     render_steps(current=2, steps=STEPS_MD_MASK)
-    text     = st.session_state[_FILE_TEXT]
-    entities = st.session_state[_ENTITIES]
+    text      = st.session_state[_FILE_TEXT]
+    entities  = st.session_state[_ENTITIES]
     file_name = st.session_state.get(_FILE_NAME, "файл")
-    ai_done  = st.session_state.get(_AI_DONE, False)
+    ai_done   = st.session_state.get(_AI_DONE, False)
+    ai_delta  = st.session_state.get(_AI_DELTA, 0)
 
     st.subheader(f"Найденные чувствительные данные: {file_name}")
 
-    # --- Кнопка Ollama (аналог кнопки AI-проверки в Excel) -----------------
+    # --- Блок Ollama --------------------------------------------------------
     st.markdown("---")
     ai_col1, ai_col2 = st.columns([2, 3])
     with ai_col1:
-        ollama_disabled = ai_done
         btn_label = "✅ Ollama уже применена" if ai_done else "🤖 Уточнить через Ollama"
-        if st.button(
+        clicked = st.button(
             btn_label,
-            disabled=ollama_disabled,
+            disabled=ai_done,
             use_container_width=True,
+            key="btn_ollama",
             help="Запустить локальную LLM (Ollama) для поиска дополнительных сущностей. "
                  "Требует запущенного Ollama на localhost:11434.",
-        ):
-            _run_ollama(text)
-            entities = st.session_state[_ENTITIES]   # обновлённый список
-            st.rerun()
+        )
 
     with ai_col2:
         if ai_done:
-            st.success(
-                "Ollama нашла дополнительные сущности — список обновлён.",
-                icon="✅",
+            msg = (
+                f"Ollama нашла **{ai_delta}** новых сущностей — список обновлён."
+                if ai_delta else
+                "Ollama завершила анализ. Новых сущностей сверх базовых не найдено."
             )
+            st.success(msg, icon="✅")
         else:
             st.info(
                 "Базовое сканирование выполнено (Natasha + Presidio + regex). "
@@ -119,6 +121,13 @@ def _render_review() -> None:
                 "сущностей, которые базовые методы могли пропустить.",
                 icon="ℹ️",
             )
+
+    # Обработка нажатия — ПОСЛЕ рендера обоих столбцов,
+    # чтобы st.spinner не ломал layout
+    if clicked and not ai_done:
+        _run_ollama_and_merge(text)
+        st.rerun()
+
     st.markdown("---")
 
     # --- Отображение найденных сущностей ------------------------------------
@@ -178,7 +187,6 @@ def _render_review() -> None:
                 anon_text, mapping = anonymize(
                     text,
                     enabled_labels=enabled if enabled else None,
-                    # передаём уже обогащённые сущности, чтобы не запускать детектирование повторно
                     predetected_entities=st.session_state.get(_ENTITIES),
                 )
 
@@ -188,8 +196,8 @@ def _render_review() -> None:
                     anon_text, mapping = anonymize_extra_terms(anon_text, extra_terms, mapping)
 
                 st.session_state[_ANON_TEXT] = anon_text
-                st.session_state[_MAPPING] = mapping
-                st.session_state[_STAGE] = _STAGE_RESULT
+                st.session_state[_MAPPING]   = mapping
+                st.session_state[_STAGE]     = _STAGE_RESULT
                 st.rerun()
 
 
@@ -197,23 +205,44 @@ def _render_review() -> None:
 # Вспомогательная функция: запуск Ollama и обогащение списка сущностей
 # ---------------------------------------------------------------------------
 
-def _run_ollama(text: str) -> None:
-    """Запустить Ollama, смержить результат с базовыми сущностями."""
-    with st.spinner("Ollama анализирует текст… Это может занять 15–60 секунд."):
+def _run_ollama_and_merge(text: str) -> None:
+    """Запустить Ollama, смержить результат с базовыми сущностями.
+
+    Исключения пробрасываются через st.error() — состояние не теряется.
+    """
+    from core.ai_ner import AINer, merge_entity_lists, OllamaUnavailableError, OllamaParseError
+
+    base_entities = st.session_state.get(_ENTITIES, [])
+    base_count    = len(base_entities)
+
+    with st.spinner("Ollama анализирует текст… Это может занять 15–120 секунд."):
         try:
-            from core.ai_ner import AINer, merge_entity_lists
             ner = AINer(mode="ollama")
             ai_entities = ner.extract(text)
-            base_entities = st.session_state.get(_ENTITIES, [])
-            merged = merge_entity_lists(base_entities, ai_entities)
-            st.session_state[_ENTITIES] = merged
-            st.session_state[_AI_DONE] = True
-        except Exception as exc:
+        except OllamaUnavailableError as exc:
             st.error(
-                f"Ollama недоступна или вернула ошибку: {exc}\n\n"
-                "Убедитесь, что Ollama запущена (`ollama serve`) и модель загружена "
-                "(`ollama pull qwen2.5:7b`)."
+                f"**Ollama недоступна.**\n\n{exc}\n\n"
+                "Базовый список сущностей сохранён — можно продолжить без Ollama.",
+                icon="🔴",
             )
+            return
+        except OllamaParseError as exc:
+            st.error(
+                f"**Ollama вернула некорректный ответ.**\n\n{exc}\n\n"
+                "Попробуйте снова или используйте другую модель (ENIGMA_OLLAMA_MODEL).",
+                icon="🟠",
+            )
+            return
+        except Exception as exc:
+            st.error(f"**Неожиданная ошибка Ollama:** {exc}", icon="🔴")
+            return
+
+    merged = merge_entity_lists(base_entities, ai_entities)
+    delta  = len(merged) - base_count
+
+    st.session_state[_ENTITIES] = merged
+    st.session_state[_AI_DONE]  = True
+    st.session_state[_AI_DELTA] = delta
 
 
 # ---------------------------------------------------------------------------
@@ -273,7 +302,8 @@ def _render_result() -> None:
 
 
 def _reset() -> None:
-    for key in [_STAGE, _FILE_NAME, _FILE_TEXT, _ANON_TEXT, _MAPPING, _ENTITIES, _AI_DONE]:
+    for key in [_STAGE, _FILE_NAME, _FILE_TEXT, _ANON_TEXT, _MAPPING,
+                _ENTITIES, _AI_DONE, _AI_DELTA]:
         st.session_state.pop(key, None)
     for label in ALL_LABELS:
         st.session_state.pop(f"md_label_{label}", None)
