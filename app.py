@@ -13,7 +13,7 @@ if _logo.exists():
 else:
     st.sidebar.title("Enigma")
 
-st.sidebar.markdown("**Excel / CSV**")
+st.sidebar.markdown("** **")
 page = st.sidebar.radio(
     "Режим",
     ["Маскирование Excel/CSV", "Демаскирование Excel/CSV", "Конвертация в MD", "Маскирование MD", "Демаскирование MD", "Помощь"],
