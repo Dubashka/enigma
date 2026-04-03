@@ -18,22 +18,19 @@ from typing import Any
 # Regex patterns for structured PII
 # ---------------------------------------------------------------------------
 
-# ORG opening/closing quote characters: « » "
 _ORG_OPEN  = r'[«"]'
 _ORG_CLOSE = r'[»"]'
 
-# Legal-form prefixes used to detect org names
 _ORG_PREFIXES = ("ООО", "ОАО", "ЗАО", "АО", "ПАО", "ИП", "НКО", "ФГУП", "ГУП", "АНО")
 _ORG_PREFIX_RE = "|".join(_ORG_PREFIXES)
 
-# Cyrillic helpers (no quantifier — add explicitly per pattern)
-_C  = r'[А-ЯЁ]'   # one uppercase Cyrillic letter
-_cl = r'[а-яё]'   # one lowercase Cyrillic letter
+_C  = r'[А-ЯЁ]'
+_cl = r'[а-яё]'
 
 # ---------------------------------------------------------------------------
 # Address building blocks
 # ---------------------------------------------------------------------------
-# Street-type keywords
+
 _STREET_KW = (
     r'(?:ул(?:\.|[и]ца)'
     r'|пр(?:\.|[о]спект)'
@@ -45,18 +42,14 @@ _STREET_KW = (
     r'|проезд'
     r'|тупик)'
 )
-# Street name: 1-4 words (letters, digits, hyphens)
 _STREET_NAME = r'[А-ЯЁа-яё0-9][\wа-яёА-ЯЁ\-]*(?:\s+[А-ЯЁа-яё0-9][\wа-яёА-ЯЁ\-]*){0,3}'
-# House / building / office suffixes (standalone, each wrapped in non-capturing group)
 _HOUSE      = r'(?:,?\s*д(?:\.|[о]м\.?)\s*\d+[\w\-/]*)'
-_HOUSE_BARE = r',?\s*д(?:\.|[о]м\.?)\s*\d+[\w\-/]*'   # same without outer (?:...)
+_HOUSE_BARE = r',?\s*д(?:\.|[о]м\.?)\s*\d+[\w\-/]*'
 _BLDG       = r'(?:,?\s*(?:к(?:\.|[о]рп\.?)|стр(?:\.?)?)\s*\d+[\w\-/]*)'
 _FLAT       = r'(?:,?\s*(?:кв(?:\.|[а]рт\.?)|оф(?:\.)?)\s*\d+)'
-# City/settlement prefixes
 _CITY_KW   = r'(?:г(?:\.|[о]род)|п(?:\.|[о]с(?:\.|[е]лок))|с(?:\.|[е]ло)|д(?:\.|[е]ревня))'
 _CITY_NAME = r'[А-ЯЁ][а-яёА-ЯЁ\-]+(?:-[А-ЯЁ][а-яёА-ЯЁ\-]+)*'
 
-# Russian month names (all grammatical cases)
 _MONTH_NAME = (
     r'(?:января|январе|январь'
     r'|февраля|феврале|февраль'
@@ -73,13 +66,9 @@ _MONTH_NAME = (
 )
 
 _PATTERNS: list[tuple[str, str]] = [
-    # Email — before phone to avoid partial overlap
     ("EMAIL", r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}'),
-    # Russian mobile / landline phones
     ("ТЕЛЕФОН", r'(?<!\d)(?:\+7|8)[\s\-]?\(?\d{3}\)?[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}(?!\d)'),
-    # IPv4
     ("IP", r'\b(?:\d{1,3}\.){3}\d{1,3}\b'),
-    # Russian legal entities
     (
         "ОРГ",
         r'(?:' + _ORG_PREFIX_RE + r')'
@@ -88,24 +77,12 @@ _PATTERNS: list[tuple[str, str]] = [
         + r'|\s+[А-ЯЁ][а-яёА-ЯЁ\w\-]{1,40}(?:\s+[А-ЯЁ][а-яёА-ЯЁ\w\-]{1,40}){0,3}'
         + r')?',
     ),
-    # ---- Person name formats (ФИО) — initials-based, high precision ----
-    (
-        "ФИО",
-        _C + _cl + r'+\s+' + _C + r'\.' + _C + r'\.',
-    ),
-    (
-        "ФИО",
-        _C + r'\.' + _C + r'\.\s+' + _C + _cl + r'+',
-    ),
-    (
-        "ФИО",
-        r'[А-ЯЁ][а-яё]{3,}\s+[А-ЯЁ][а-яё]{3,}\s+[А-ЯЁ][а-яё]{3,}',
-    ),
-    (
-        "ФИО",
-        r'[А-ЯЁ][а-яё]{3,}\s+[А-ЯЁ][а-яё]{3,}',
-    ),
-    # ---- Address patterns (АДРЕС) ----
+    # ФИО с инициалами — высокая точность, не фильтруем
+    ("ФИО", _C + _cl + r'+\s+' + _C + r'\.' + _C + r'\.'),
+    ("ФИО", _C + r'\.' + _C + r'\.\s+' + _C + _cl + r'+'),
+    # Полное ФИО (Три слова) — ТОЛЬКО на отдельной строке
+    ("ФИО", r'[А-ЯЁ][а-яё]{3,}\s+[А-ЯЁ][а-яё]{3,}\s+[А-ЯЁ][а-яё]{3,}'),
+    # ---- АДРЕС ----
     (
         "АДРЕС",
         _CITY_KW + r'\s+' + _CITY_NAME + r',\s*'
@@ -123,49 +100,72 @@ _PATTERNS: list[tuple[str, str]] = [
 ]
 
 # ---------------------------------------------------------------------------
-# Geo / service stop-list for ФИО false-positive filtering
+# Стоп-слова
 # ---------------------------------------------------------------------------
 
 _GEO_STOPWORDS: frozenset[str] = frozenset({
     "москва", "санкт-петербург", "петербург", "новосибирск", "екатеринбург",
     "казань", "нижний", "новгород", "челябинск", "самара", "омск",
     "ростов", "уфа", "красноярск", "пермь", "воронеж", "волгоград",
-    "краснодар", "саратов", "тюмень", "тольятти", "ижевск", "барнаул",
-    "иркутск", "ульяновск", "хабаровск", "ярославль", "владивосток",
-    "махачкала", "томск", "оренбург", "кемерово", "новокузнецк",
-    "рязань", "астрахань", "пенза", "липецк", "тула", "киров",
-    "чебоксары", "калининград", "брянск", "курск", "иваново",
-    "магнитогорск", "тверь", "ставрополь", "белгород",
-    "город", "область", "район", "край", "республика",
-    "поселок", "деревня", "село", "посёлок",
-    "округ", "муниципальный", "административный",
-    "россия", "российская", "федерация", "федеральный",
-    "москвы", "московская", "ленинградская",
-    "директор", "генеральный", "главный", "старший", "младший",
-    "руководитель", "начальник", "заместитель", "председатель",
-    "министр", "президент", "губернатор", "мэр",
-    "новый", "новая", "новое", "новые",
-    "красный", "красная", "красное",
-    "белый", "белая", "белое",
-    "большой", "большая",
-    "малый", "малая",
-    "центральный", "центральная",
-    "северный", "северная", "южный", "южная",
-    "западный", "западная", "восточный", "восточная",
+    "краснодар", "саратов", "тюмень", "тольятти", "ижевск",
+    "барнаул", "ульяновск", "иркутск", "хабаровск", "ярославль",
+    "владивосток", "махачкала", "томск", "оренбург", "кемерово",
+    "россия", "рф", "беларусь", "украина", "казахстан",
+    "улица", "проспект", "переулок", "бульвар", "площадь",
+    "район", "область", "край", "округ", "республика",
 })
 
-_FIO_FULLNAME_PATTERNS: frozenset[str] = frozenset({
+# ---------------------------------------------------------------------------
+# ОРГ-стоп-список: нарицательные слова, которые Natasha часто
+# выдаёт за названия организаций (ORG). Малый регистр.
+# ---------------------------------------------------------------------------
+_ORG_COMMON_WORDS: frozenset[str] = frozenset({
+    # Роли сторон в договорах
+    "заказчик", "заказчика", "заказчику", "заказчиком",
+    "исполнитель", "исполнителя", "исполнителю",
+    "подрядчик", "подрядчика", "подрядчику",
+    "покупатель", "поставщик", "арендодатель", "арендатор",
+    "сторона", "стороны", "стороне",
+    # Документы
+    "доверенность", "доверенности", "доверенностю",
+    "доверенностью",  # твор. падеж
+    "договор", "договора", "договору", "договором",
+    "соглашение", "соглашения", "приложение",
+    "акт", "счет", "заключение",
+    # Работы / услуги
+    "работа", "работы", "работам",
+    "услуга", "услуги", "услугам",
+    "заказ", "заказа", "заказу", "заказом",
+    "поставка", "оплата",
+    # Оргструктура
+    "отдел", "департамент", "управление", "служба",
+    "центр", "компания", "организация", "предприятие",
+    "подразделение", "филиал",
+    # Должности
+    "руководитель", "директор", "менеджер",
+    "сотрудник", "работник", "специалист",
+    "председатель", "заместитель", "начальник",
+    # Проект
+    "проект", "программа", "проекты",
+    "клиент", "партнер", "контрагент",
+})
+
+# ФИО-паттерны, требующие проверки (полное ФИО без инициалов)
+_FIO_STRICT_PATTERNS: frozenset[str] = frozenset({
     r'[А-ЯЁ][а-яё]{3,}\s+[А-ЯЁ][а-яё]{3,}\s+[А-ЯЁ][а-яё]{3,}',
-    r'[А-ЯЁ][а-яё]{3,}\s+[А-ЯЁ][а-яё]{3,}',
 })
 
 
-def _is_fio_candidate(match_text: str) -> bool:
-    words = match_text.lower().split()
-    return not any(w in _GEO_STOPWORDS for w in words)
+def _is_geo_word(word: str) -> bool:
+    return word.lower() in _GEO_STOPWORDS
+
+
+def _is_org_common_word(word: str) -> bool:
+    return word.lower() in _ORG_COMMON_WORDS
 
 
 def _is_short_line_match(text: str, match_start: int, match_end: int) -> bool:
+    """True если совпадение занимает всю строку (или почти всю)."""
     line_start = text.rfind("\n", 0, match_start)
     line_start = 0 if line_start == -1 else line_start + 1
     line_end = text.find("\n", match_end)
@@ -244,12 +244,14 @@ def _regex_entities(text: str) -> list[tuple[int, int, str, str]]:
     found: list[tuple[int, int, str, str]] = []
     for label, pattern in _PATTERNS:
         for m in re.finditer(pattern, text, flags=re.IGNORECASE):
-            if label == "ФИО" and pattern in _FIO_FULLNAME_PATTERNS:
-                if not _is_fio_candidate(m.group()):
-                    continue
+            val = m.group()
+            if label == "ФИО" and pattern in _FIO_STRICT_PATTERNS:
+                # Полное ФИО без инициалов: только на отдельной строке
                 if not _is_short_line_match(text, m.start(), m.end()):
                     continue
-            found.append((m.start(), m.end(), label, m.group()))
+                if any(_is_geo_word(w) for w in val.split()):
+                    continue
+            found.append((m.start(), m.end(), label, val))
     return found
 
 
@@ -298,7 +300,7 @@ def _natasha_entities_per_line(text: str) -> list[tuple[int, int, str, str]]:
             if not _all_words_capitalized(stripped):
                 line_offset += len(raw_line) + 1
                 continue
-            if not _is_fio_candidate(stripped):
+            if any(_is_geo_word(w) for w in stripped.split()):
                 line_offset += len(raw_line) + 1
                 continue
             probe = _NER_PREFIX + stripped
@@ -341,6 +343,38 @@ def _presidio_entities(text: str) -> list[tuple[int, int, str, str]]:
         return []
 
 
+def _postfilter_spans(
+    spans: list[tuple[int, int, str, str]],
+) -> list[tuple[int, int, str, str]]:
+    """Фильтрация ложных срабатываний Natasha.
+
+    Отклоняет:
+    - PER/ФИО — если все токены нарицательные (словарь + pymorphy2)
+    - ORG/ОРГ — если все токены присутствуют в _ORG_COMMON_WORDS
+    """
+    try:
+        from core.detector_patch import natasha_postfilter
+        spans = natasha_postfilter(spans)
+    except ImportError:
+        pass
+
+    # Дополнительный фильтр для ОРГ: однословные нарицательные
+    filtered: list[tuple[int, int, str, str]] = []
+    for span in spans:
+        label = span[2]
+        value = span[3]
+        if label in ("ОРГ", "ORG", "organization"):
+            tokens = value.split()
+            if all(_is_org_common_word(t) for t in tokens):
+                import logging as _log
+                _log.getLogger(__name__).info(
+                    "Postfilter: отклонён ORG '%s' — все токены нарицательные", value
+                )
+                continue
+        filtered.append(span)
+    return filtered
+
+
 def _merge_spans(
     spans: list[tuple[int, int, str, str]]
 ) -> list[tuple[int, int, str, str]]:
@@ -375,6 +409,8 @@ def detect_entities(
     if use_presidio:
         spans += _presidio_entities(text)
     spans = _expand_org_spans(text, spans)
+    # Постфильтр: удалить нарицательные ФИО/ОРГ до merge, чтобы не занимать span
+    spans = _postfilter_spans(spans)
     spans = _merge_spans(spans)
     if labels:
         spans = [s for s in spans if s[2] in labels]
@@ -396,7 +432,6 @@ def anonymize(
             already run manually — avoids redundant re-detection.
     """
     if predetected_entities is not None:
-        # Используем уже готовый список — дополнительное детектирование не запускаем
         spans = list(predetected_entities)
         if enabled_labels:
             spans = [s for s in spans if s[2] in enabled_labels]
