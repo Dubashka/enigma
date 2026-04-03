@@ -4,6 +4,9 @@ Detects PII entities using Natasha (PER, ORG) + Presidio (email, phone, IP)
 + regex (contract numbers, dates, legal entities, person names with initials, addresses).
 User-defined extra terms are masked after automatic detection.
 Mapping JSON allows full restoration.
+
+anonymize() accepts an optional predetected_entities argument — if provided,
+detect_entities() is NOT called again (used when Ollama was already run manually).
 """
 from __future__ import annotations
 
@@ -45,10 +48,10 @@ _STREET_KW = (
 # Street name: 1-4 words (letters, digits, hyphens)
 _STREET_NAME = r'[А-ЯЁа-яё0-9][\wа-яёА-ЯЁ\-]*(?:\s+[А-ЯЁа-яё0-9][\wа-яёА-ЯЁ\-]*){0,3}'
 # House / building / office suffixes (standalone, each wrapped in non-capturing group)
-_HOUSE      = r'(?:,?\s*д(?:\.|ом\.?)\s*\d+[\w\-/]*)'
-_HOUSE_BARE = r',?\s*д(?:\.|ом\.?)\s*\d+[\w\-/]*'   # same without outer (?:...)
-_BLDG       = r'(?:,?\s*(?:к(?:\.|орп\.?)|стр(?:\.)?)\s*\d+[\w\-/]*)'
-_FLAT       = r'(?:,?\s*(?:кв(?:\.|арт\.?)|оф(?:\.)?)\s*\d+)'
+_HOUSE      = r'(?:,?\s*д(?:\.|[о]м\.?)\s*\d+[\w\-/]*)'
+_HOUSE_BARE = r',?\s*д(?:\.|[о]м\.?)\s*\d+[\w\-/]*'   # same without outer (?:...)
+_BLDG       = r'(?:,?\s*(?:к(?:\.|[о]рп\.?)|стр(?:\.?)?)\s*\d+[\w\-/]*)'
+_FLAT       = r'(?:,?\s*(?:кв(?:\.|[а]рт\.?)|оф(?:\.)?)\s*\d+)'
 # City/settlement prefixes
 _CITY_KW   = r'(?:г(?:\.|[о]род)|п(?:\.|[о]с(?:\.|[е]лок))|с(?:\.|[е]ло)|д(?:\.|[е]ревня))'
 _CITY_NAME = r'[А-ЯЁ][а-яёА-ЯЁ\-]+(?:-[А-ЯЁ][а-яёА-ЯЁ\-]+)*'
@@ -86,49 +89,36 @@ _PATTERNS: list[tuple[str, str]] = [
         + r')?',
     ),
     # ---- Person name formats (ФИО) — initials-based, high precision ----
-    # Format 1: Фамилия И.О.  e.g. Скорочкина А.А. (both initials required)
     (
         "ФИО",
         _C + _cl + r'+\s+' + _C + r'\.' + _C + r'\.',
     ),
-    # Format 2: И.О. Фамилия  e.g. А.А. Скорочкина
     (
         "ФИО",
         _C + r'\.' + _C + r'\.\s+' + _C + _cl + r'+',
     ),
-    # Format 3: Фамилия Имя Отчество (три слова, 4+ букв каждое)
-    # Применяется только к строкам целиком — фильтр в _regex_entities
     (
         "ФИО",
         r'[А-ЯЁ][а-яё]{3,}\s+[А-ЯЁ][а-яё]{3,}\s+[А-ЯЁ][а-яё]{3,}',
     ),
-    # Format 4: Фамилия Имя (два слова, 4+ букв каждое)
-    # Тоже только для «чистых» коротких строк — фильтр в _regex_entities
     (
         "ФИО",
         r'[А-ЯЁ][а-яё]{3,}\s+[А-ЯЁ][а-яё]{3,}',
     ),
     # ---- Address patterns (АДРЕС) ----
-    # Format A: г. Москва, ул. Ленина, д. 5[, кв. 12]
     (
         "АДРЕС",
         _CITY_KW + r'\s+' + _CITY_NAME + r',\s*'
         + _STREET_KW + r'\s+' + _STREET_NAME
         + _HOUSE + r'?' + _BLDG + r'?' + _FLAT + r'?',
     ),
-    # Format B: ул. Ленина, д. 5[, к. 2][, кв. 12]  (no city prefix)
     (
         "АДРЕС",
         _STREET_KW + r'\s+' + _STREET_NAME + r',\s*'
         + _HOUSE_BARE + _BLDG + r'?' + _FLAT + r'?',
     ),
-    # Postal index intentionally omitted — too many false positives.
-    #
-    # Contract / document numbers
     ("ДОГОВОР", r'№\s?\d+[\-/\d]*'),
-    # Dates: 15.03.2024 / 2024-03-15
     ("ДАТА", r'\b(?:\d{2}\.\d{2}\.\d{4}|\d{4}-\d{2}-\d{2})\b'),
-    # Dates: «01» марта 2026 г. / 01 марта 2026 г.
     ("ДАТА", r'(?:«\d{1,2}»|"\d{1,2}"|\b\d{1,2})\s+' + _MONTH_NAME + r'\s+\d{4}(?:\s*г\.?)?'),
 ]
 
@@ -136,10 +126,7 @@ _PATTERNS: list[tuple[str, str]] = [
 # Geo / service stop-list for ФИО false-positive filtering
 # ---------------------------------------------------------------------------
 
-# Слова, которые НЕ могут быть частью ФИО (топонимы, должности, служебные слова).
-# Все в нижнем регистре — сравнение всегда через .lower().
 _GEO_STOPWORDS: frozenset[str] = frozenset({
-    # Крупные города России
     "москва", "санкт-петербург", "петербург", "новосибирск", "екатеринбург",
     "казань", "нижний", "новгород", "челябинск", "самара", "омск",
     "ростов", "уфа", "красноярск", "пермь", "воронеж", "волгоград",
@@ -149,18 +136,14 @@ _GEO_STOPWORDS: frozenset[str] = frozenset({
     "рязань", "астрахань", "пенза", "липецк", "тула", "киров",
     "чебоксары", "калининград", "брянск", "курск", "иваново",
     "магнитогорск", "тверь", "ставрополь", "белгород",
-    # Топо-префиксы / административные единицы
     "город", "область", "район", "край", "республика",
     "поселок", "деревня", "село", "посёлок",
     "округ", "муниципальный", "административный",
-    # Страны и регионы
     "россия", "российская", "федерация", "федеральный",
     "москвы", "московская", "ленинградская",
-    # Должности и частые нарицательные слова
     "директор", "генеральный", "главный", "старший", "младший",
     "руководитель", "начальник", "заместитель", "председатель",
     "министр", "президент", "губернатор", "мэр",
-    # Распространённые прилагательные-словосочетания (Новый Год и т.п.)
     "новый", "новая", "новое", "новые",
     "красный", "красная", "красное",
     "белый", "белая", "белое",
@@ -171,9 +154,6 @@ _GEO_STOPWORDS: frozenset[str] = frozenset({
     "западный", "западная", "восточный", "восточная",
 })
 
-# Паттерны Format 3 / Format 4 (ФИО без инициалов) требуют дополнительной проверки.
-# Паттерны Format 1 / Format 2 (с точками инициалов) проверке не подлежат —
-# они и так высокоточные.
 _FIO_FULLNAME_PATTERNS: frozenset[str] = frozenset({
     r'[А-ЯЁ][а-яё]{3,}\s+[А-ЯЁ][а-яё]{3,}\s+[А-ЯЁ][а-яё]{3,}',
     r'[А-ЯЁ][а-яё]{3,}\s+[А-ЯЁ][а-яё]{3,}',
@@ -181,13 +161,11 @@ _FIO_FULLNAME_PATTERNS: frozenset[str] = frozenset({
 
 
 def _is_fio_candidate(match_text: str) -> bool:
-    """Вернуть True, если ни одно слово совпадения не входит в стоп-список топонимов."""
     words = match_text.lower().split()
     return not any(w in _GEO_STOPWORDS for w in words)
 
 
 def _is_short_line_match(text: str, match_start: int, match_end: int) -> bool:
-    """Вернуть True, если совпадение занимает почти всю строку (2–3 слова подряд)."""
     line_start = text.rfind("\n", 0, match_start)
     line_start = 0 if line_start == -1 else line_start + 1
     line_end = text.find("\n", match_end)
@@ -198,22 +176,15 @@ def _is_short_line_match(text: str, match_start: int, match_end: int) -> bool:
 
 
 def _all_words_capitalized(text: str) -> bool:
-    """Вернуть True, если каждое слово начинается с заглавной буквы.
-
-    Имена и фамилии всегда начинаются с заглавной.
-    Прилагательные и существительные (приоритетным, направлениям) — строчные.
-    """
     words = text.split()
     return all(w[0].isupper() for w in words if w)
 
 
-# Sentinel prefix injected around each line when feeding to Natasha.
 _NER_PREFIX = "Работник "
 _NER_PREFIX_LEN = len(_NER_PREFIX)
 
 
 def _extract_org_core(org_value: str) -> str | None:
-    """Extract the bare company name from a full ORG match."""
     value = org_value.strip()
     for prefix in sorted(_ORG_PREFIXES, key=len, reverse=True):
         if value.upper().startswith(prefix):
@@ -230,7 +201,6 @@ def _extract_org_core(org_value: str) -> str | None:
 
 
 def _org_stem(name: str) -> str:
-    """Return the root stem to match inflected forms."""
     endings = ["овой", "овый", "евой", "евый", "еской", "еский",
                "овое", "евое", "еское",
                "ами", "ах", "ом", "ой", "ого",
@@ -248,7 +218,6 @@ def _expand_org_spans(
     text: str,
     spans: list[tuple[int, int, str, str]],
 ) -> list[tuple[int, int, str, str]]:
-    """For every ORG span add inflected bare-name occurrences."""
     extra: list[tuple[int, int, str, str]] = []
     existing_starts = {s[0] for s in spans}
     org_spans = [s for s in spans if s[2] == "ОРГ"]
@@ -276,11 +245,8 @@ def _regex_entities(text: str) -> list[tuple[int, int, str, str]]:
     for label, pattern in _PATTERNS:
         for m in re.finditer(pattern, text, flags=re.IGNORECASE):
             if label == "ФИО" and pattern in _FIO_FULLNAME_PATTERNS:
-                # Расширенные паттерны (без инициалов) — двойная фильтрация:
-                # 1. стоп-список топонимов и служебных слов
                 if not _is_fio_candidate(m.group()):
                     continue
-                # 2. только строки, целиком состоящие из 2–3 слов
                 if not _is_short_line_match(text, m.start(), m.end()):
                     continue
             found.append((m.start(), m.end(), label, m.group()))
@@ -288,7 +254,6 @@ def _regex_entities(text: str) -> list[tuple[int, int, str, str]]:
 
 
 def _natasha_entities(text: str) -> list[tuple[int, int, str, str]]:
-    """Run Natasha NER on full text (catches names inside sentences)."""
     try:
         from natasha import Segmenter, NewsEmbedding, NewsNERTagger, Doc
         seg = Segmenter()
@@ -303,8 +268,6 @@ def _natasha_entities(text: str) -> list[tuple[int, int, str, str]]:
             if span.type not in label_map:
                 continue
             value = text[span.start:span.stop]
-            # Постфильтр для ФИО: если хотя бы одно слово строчное —
-            # это не имя (напр.: «приоритетным продуктовым направлениям»)
             if span.type == "PER" and not _all_words_capitalized(value):
                 continue
             result.append((span.start, span.stop, label_map[span.type], value))
@@ -314,7 +277,6 @@ def _natasha_entities(text: str) -> list[tuple[int, int, str, str]]:
 
 
 def _natasha_entities_per_line(text: str) -> list[tuple[int, int, str, str]]:
-    """Run Natasha line-by-line with a context prefix to catch isolated full names."""
     try:
         from natasha import Segmenter, NewsEmbedding, NewsNERTagger, Doc
         seg = Segmenter()
@@ -333,11 +295,9 @@ def _natasha_entities_per_line(text: str) -> list[tuple[int, int, str, str]]:
             r'^[А-ЯЁ][а-яёА-ЯЁ\-]+(?:\s+[А-ЯЁ][а-яёА-ЯЁ\-]+){1,3}$',
             stripped
         ):
-            # Гард 1: каждое слово должно начинаться с заглавной буквы
             if not _all_words_capitalized(stripped):
                 line_offset += len(raw_line) + 1
                 continue
-            # Гард 2: стоп-список топонимов и служебных слов
             if not _is_fio_candidate(stripped):
                 line_offset += len(raw_line) + 1
                 continue
@@ -401,7 +361,11 @@ def detect_entities(
     use_regex: bool = True,
     labels: set[str] | None = None,
 ) -> list[tuple[int, int, str, str]]:
-    """Detect all PII entities in text."""
+    """Detect all PII entities in text (base pipeline: Natasha + Presidio + regex).
+
+    Ollama/GLiNER are NOT called here — they are triggered manually via the UI
+    and merged into the entity list before anonymize() is called.
+    """
     spans: list[tuple[int, int, str, str]] = []
     if use_regex:
         spans += _regex_entities(text)
@@ -420,8 +384,26 @@ def detect_entities(
 def anonymize(
     text: str,
     enabled_labels: set[str] | None = None,
+    predetected_entities: list[tuple[int, int, str, str]] | None = None,
 ) -> tuple[str, dict[str, dict[str, str]]]:
-    spans = detect_entities(text, labels=enabled_labels)
+    """Replace PII entities with placeholders.
+
+    Args:
+        text: original text.
+        enabled_labels: if set, only entities with these labels are masked.
+        predetected_entities: if provided, detection is SKIPPED and this list
+            is used directly. Pass session_state[_ENTITIES] when Ollama was
+            already run manually — avoids redundant re-detection.
+    """
+    if predetected_entities is not None:
+        # Используем уже готовый список — дополнительное детектирование не запускаем
+        spans = list(predetected_entities)
+        if enabled_labels:
+            spans = [s for s in spans if s[2] in enabled_labels]
+        spans = _merge_spans(spans)
+    else:
+        spans = detect_entities(text, labels=enabled_labels)
+
     counters: dict[str, int] = {}
     mapping: dict[str, dict[str, str]] = {}
     value_cache: dict[str, str] = {}
