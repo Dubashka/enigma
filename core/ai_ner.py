@@ -46,6 +46,8 @@ _DEFAULT_MODE = os.environ.get("ENIGMA_AI_NER_MODE", "off").lower()
 _GLINER_MODEL = os.environ.get("ENIGMA_GLINER_MODEL", "urchade/gliner_multi-v2.1")
 _OLLAMA_URL   = os.environ.get("ENIGMA_OLLAMA_URL",   "http://localhost:11434")
 _OLLAMA_MODEL = os.environ.get("ENIGMA_OLLAMA_MODEL", "qwen2.5:7b")
+_KEEP_ALIVE   = "15m"  # держать модель в памяти между запросами
+_TIMEOUT      = 180    # секунд — даём время на холодный старт модели
 
 GLINER_LABELS = [
     "person", "organization", "address", "phone", "email",
@@ -170,12 +172,13 @@ def _run_ollama(text: str) -> list[dict]:
         ],
         "stream": False,
         "format": "json",
+        "keep_alive": _KEEP_ALIVE,
     }
     try:
         resp = requests.post(
             f"{_OLLAMA_URL}/api/chat",
             json=payload,
-            timeout=120,
+            timeout=_TIMEOUT,
         )
         resp.raise_for_status()
     except requests.exceptions.ConnectionError:
@@ -185,7 +188,7 @@ def _run_ollama(text: str) -> list[dict]:
         )
     except requests.exceptions.Timeout:
         raise OllamaUnavailableError(
-            f"Ollama не ответила за 120 секунд (модель {_OLLAMA_MODEL} может ещё загружаться).\n"
+            f"Ollama не ответила за {_TIMEOUT} секунд (модель {_OLLAMA_MODEL} может ещё загружаться).\n"
             "Подождите и попробуйте снова."
         )
     except requests.exceptions.HTTPError as exc:

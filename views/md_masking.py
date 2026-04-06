@@ -4,7 +4,7 @@
 Формат на выходе: .md (Markdown)
 
 PDF-скан → Tesseract OCR, остальные → markitdown.
-Ollama AI NER — в разработке, запуск временно заблокирован.
+Ollama AI NER — доступна при запущенном Ollama (localhost:11434).
 """
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ _AI_DELTA    = "md_mask_ai_delta"
 _CONV_WARN   = "md_mask_conv_warn"    # предупреждение от конвертера (OCR и т.п.)
 
 # Флаг: True = блок Ollama виден, False = скрыт за expander «в разработке»
-_OLLAMA_ENABLED = False
+_OLLAMA_ENABLED = True
 
 # Форматы, принимаемые file_uploader
 _ACCEPTED_TYPES = ["md", "txt", "pdf", "docx", "doc", "pptx", "odt"]
@@ -204,8 +204,7 @@ def _render_review() -> None:
     st.subheader(f"Найденные чувствительные данные: {file_name}")
 
     # -------------------------------------------------------------------
-    # Блок Ollama — скрыт за expander, пока функция в разработке
-    # Чтобы разблокировать, поставьте _OLLAMA_ENABLED = True в начале файла
+    # Блок Ollama
     # -------------------------------------------------------------------
     if _OLLAMA_ENABLED:
         _render_ollama_block(text)
@@ -297,7 +296,7 @@ def _render_review() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Ollama block (используется только при _OLLAMA_ENABLED = True)
+# Ollama block
 # ---------------------------------------------------------------------------
 
 def _render_ollama_block(text: str) -> None:
@@ -349,7 +348,7 @@ def _run_ollama_and_merge(text: str) -> None:
     base_entities = st.session_state.get(_ENTITIES, [])
     base_count    = len(base_entities)
 
-    with st.spinner("Ollama анализирует текст… Это может занять 15–120 секунд."):
+    with st.spinner("Ollama анализирует текст… Это может занять 15–180 секунд."):
         try:
             ner = AINer(mode="ollama")
             ai_entities = ner.extract(text)
