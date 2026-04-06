@@ -8,7 +8,6 @@ Ollama AI NER — доступна при запущенном Ollama (localhost
 """
 from __future__ import annotations
 
-import time
 import threading
 
 import streamlit as st
@@ -333,10 +332,18 @@ def _render_ollama_block(text: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Ollama helper — запуск с прогресс-баром и таймером
+# Ollama helper — запуск через thread.join(timeout) без блокировки UI
 # ---------------------------------------------------------------------------
 
 def _run_ollama_and_merge(text: str) -> None:
+    """
+    Запускает Ollama в фоновом потоке и ждёт его завершения через thread.join(timeout).
+
+    thread.join() НЕ блокирует Streamlit — после возврата управление
+    сразу передаётся дальше, и Streamlit может завершить рендер-цикл.
+    Если поток не завершился за _OLLAMA_TIMEOUT_SEC — явно выбрасываем
+    OllamaTimeoutError, не дожидаясь ответа requests внутри потока.
+    """
     from core.ai_ner import (
         AINer, merge_entity_lists,
         OllamaUnavailableError, OllamaTimeoutError, OllamaParseError,
@@ -345,13 +352,7 @@ def _run_ollama_and_merge(text: str) -> None:
     base_entities = st.session_state.get(_ENTITIES, [])
     base_count    = len(base_entities)
 
-    # --- UI: прогресс-бар + счётчик времени ---
-    status_text = st.empty()
-    progress_bar = st.progress(0)
-    hint_text = st.empty()
-
-    # Результат и ошибка передаются через изменяемый dict (thread-safe для чтения)
-    result_box: dict = {"entities": None, "error": None, "done": False}
+    result_box: dict = {"entities": None, "error": None}
 
     def _worker() -> None:
         try:
@@ -359,56 +360,39 @@ def _run_ollama_and_merge(text: str) -> None:
             result_box["entities"] = ner.extract(text)
         except Exception as exc:  # noqa: BLE001
             result_box["error"] = exc
-        finally:
-            result_box["done"] = True
 
     thread = threading.Thread(target=_worker, daemon=True)
     thread.start()
 
-    start_ts = time.monotonic()
-    tick = 0
+    spinner_msg = (
+        f"🤖 Ollama анализирует текст… (макс. {_OLLAMA_TIMEOUT_SEC} сек)  \n"
+        "Не закрывайте страницу."
+    )
+    with st.spinner(spinner_msg):
+        # join(timeout) отдаёт управление обратно через _OLLAMA_TIMEOUT_SEC секунд
+        # вне зависимости от того, завершился ли поток.
+        # Это НЕ блокирует Streamlit — spinner держит render-цикл живым.
+        thread.join(timeout=_OLLAMA_TIMEOUT_SEC)
 
-    # Тикаем каждую секунду, пока поток не завершится
-    while not result_box["done"]:
-        elapsed = int(time.monotonic() - start_ts)
-        pct = min(elapsed / _OLLAMA_TIMEOUT_SEC, 0.97)  # не доходим до 100% до реального финиша
-
-        progress_bar.progress(pct)
-        status_text.markdown(
-            f"⏳ **Ollama анализирует текст…** &nbsp; `{elapsed} / {_OLLAMA_TIMEOUT_SEC} сек`"
+    # Если поток всё ещё жив — считаем это таймаутом
+    if thread.is_alive():
+        st.error(
+            f"**⏰ Ollama не успела ответить за {_OLLAMA_TIMEOUT_SEC} сек.**\n\n"
+            f"Возможные причины:\n"
+            f"• Модель ещё загружается — попробуйте снова через минуту.\n"
+            f"• Документ слишком большой — разбейте на части.\n"
+            f"• Не хватает RAM/VRAM.\n\n"
+            "Базовый список сущностей сохранён — можно продолжить без Ollama.",
+            icon="⏰",
         )
+        return
 
-        # Подсказки по ходу ожидания
-        if elapsed < 15:
-            hint_text.caption("Если модель загружается впервые — это займёт чуть больше времени.")
-        elif elapsed < 60:
-            hint_text.caption("Модель обрабатывает текст. Пожалуйста, не закрывайте страницу.")
-        elif elapsed < 120:
-            hint_text.caption("⚠️ Уже больше минуты. Возможно, документ большой или модель медленная.")
-        else:
-            hint_text.caption(
-                f"⚠️ Ожидание {elapsed} сек. При таймауте {_OLLAMA_TIMEOUT_SEC} сек "
-                "будет показана ошибка и базовый список сохранится."
-            )
-
-        time.sleep(1)
-        tick += 1
-
-    # Финализируем прогресс-бар
-    elapsed_total = int(time.monotonic() - start_ts)
-    progress_bar.progress(1.0)
-    status_text.empty()
-    hint_text.empty()
-    progress_bar.empty()
-
-    # --- Обработка результата ---
+    # Поток завершился — проверяем ошибку
     err = result_box["error"]
     if err is not None:
         if isinstance(err, OllamaTimeoutError):
             st.error(
-                f"**⏰ Ollama не успела ответить за {_OLLAMA_TIMEOUT_SEC} сек** "
-                f"(прошло {elapsed_total} сек).\n\n"
-                f"{err}\n\n"
+                f"**⏰ Ollama вернула таймаут.**\n\n{err}\n\n"
                 "Базовый список сущностей сохранён — можно продолжить без Ollama.",
                 icon="⏰",
             )
@@ -428,7 +412,7 @@ def _run_ollama_and_merge(text: str) -> None:
             st.error(f"**Неожиданная ошибка Ollama:** {err}", icon="🔴")
         return
 
-    merged = merge_entity_lists(base_entities, result_box["entities"])
+    merged = merge_entity_lists(base_entities, result_box["entities"] or [])
     st.session_state[_ENTITIES] = merged
     st.session_state[_AI_DONE]  = True
     st.session_state[_AI_DELTA] = len(merged) - base_count
