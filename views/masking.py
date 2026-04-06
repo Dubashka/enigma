@@ -9,7 +9,7 @@ from core.state_keys import (
     DL_XLSX, DL_MAP_JSON, DL_MAP_XLSX, FORMAT_MODE,
     AI_RESULTS,
 )
-from core.ai_checker import check_columns_with_ai
+from core.ai_checker import check_columns_with_ai, OllamaUnavailableError
 from core.parser import save_upload, parse_preview, parse_full, cleanup_upload
 from core.detector import detect_sensitive_columns, classify_column_type
 from core.masker import mask_sheets
@@ -18,7 +18,6 @@ from ui.step_indicator import render_steps
 from ui.column_selector import render_column_selector
 
 import pandas as pd
-import requests
 
 
 def _build_zip(xlsx_bytes: bytes, json_bytes: bytes, base_name: str) -> bytes:
@@ -96,12 +95,15 @@ def _render_step_preview() -> None:
             with st.status("Анализируем столбцы с помощью AI…", expanded=True) as status:
                 st.write("🔍 Сканируем данные на наличие email, телефонов, IP…")
                 _, presidio_required = detect_sensitive_columns(sheets)
-                st.write("📤 Отправляем данные в LM Studio…")
+                st.write("📤 Отправляем данные в Ollama…")
                 try:
                     result = check_columns_with_ai(sheets, presidio_required=presidio_required)
-                except requests.exceptions.ConnectionError:
+                except OllamaUnavailableError as exc:
                     status.update(label="Ошибка подключения", state="error")
-                    st.error("Не удалось подключиться к LM Studio. Убедитесь, что он запущен на http://127.0.0.1:1234")
+                    st.error(
+                        f"Не удалось подключиться к Ollama.\n\n{exc}\n\n"
+                        "Убедитесь, что Ollama запущена: `ollama serve`"
+                    )
                     st.stop()
                 except Exception as exc:
                     status.update(label="Ошибка", state="error")
