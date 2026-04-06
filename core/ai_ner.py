@@ -47,7 +47,7 @@ _GLINER_MODEL = os.environ.get("ENIGMA_GLINER_MODEL", "urchade/gliner_multi-v2.1
 _OLLAMA_URL   = os.environ.get("ENIGMA_OLLAMA_URL",   "http://localhost:11434")
 _OLLAMA_MODEL = os.environ.get("ENIGMA_OLLAMA_MODEL", "qwen2.5:7b")
 _KEEP_ALIVE   = "15m"  # держать модель в памяти между запросами
-_TIMEOUT      = 180    # секунд — даём время на холодный старт модели
+_TIMEOUT      = 300    # секунд — 5 минут, достаточно для холодного старта модели
 
 GLINER_LABELS = [
     "person", "organization", "address", "phone", "email",
@@ -162,6 +162,10 @@ class OllamaUnavailableError(RuntimeError):
     """Пробрасывается в UI, если Ollama недоступна."""
 
 
+class OllamaTimeoutError(OllamaUnavailableError):
+    """Пробрасывается отдельно, если Ollama не ответила за _TIMEOUT секунд."""
+
+
 class OllamaParseError(RuntimeError):
     """Пробрасывается в UI, если ответ не удалось разобрать."""
 
@@ -172,7 +176,6 @@ def _extract_json_array(content: str) -> str:
     Модель может обернуть массив в markdown-блок или добавить пояснительный текст.
     Ищем первый '[' и последний ']' и возвращаем всё между ними.
     """
-    # Убираем markdown-обёртку ```json ... ```
     content = re.sub(r"```(?:json)?|```", "", content).strip()
     start = content.find("[")
     end   = content.rfind("]")
@@ -185,7 +188,8 @@ def _run_ollama(text: str) -> list[dict]:
     """Вызов Ollama REST API.
 
     Raises:
-        OllamaUnavailableError — если сервер недоступен или таймаут
+        OllamaTimeoutError     — если модель не ответила за _TIMEOUT секунд
+        OllamaUnavailableError — если сервер недоступен или HTTP-ошибка
         OllamaParseError       — если ответ не является валидным JSON-массивом
     """
     payload = {
@@ -210,12 +214,15 @@ def _run_ollama(text: str) -> list[dict]:
     except requests.exceptions.ConnectionError:
         raise OllamaUnavailableError(
             f"Ollama недоступна по адресу {_OLLAMA_URL}.\n"
-            "Запустите: ollama serve"
+            "Запустите сервер командой: ollama serve"
         )
     except requests.exceptions.Timeout:
-        raise OllamaUnavailableError(
-            f"Ollama не ответила за {_TIMEOUT} секунд (модель {_OLLAMA_MODEL} может ещё загружаться).\n"
-            "Подождите и попробуйте снова."
+        raise OllamaTimeoutError(
+            f"Ollama не ответила за {_TIMEOUT} секунд.\n"
+            f"Возможные причины:\n"
+            f"• Модель {_OLLAMA_MODEL!r} ещё загружается в первый раз — попробуйте снова через минуту.\n"
+            f"• Документ слишком большой — попробуйте разбить на части.\n"
+            f"• Не хватает RAM/VRAM для модели."
         )
     except requests.exceptions.HTTPError as exc:
         raise OllamaUnavailableError(f"Ollama вернула HTTP-ошибку: {exc}")
@@ -278,7 +285,7 @@ def merge_entity_lists(
 
     При конфликте меток (одна позиция, разные метки) — логируем, оставляем оба варианта.
     """
-    merged = list(base)  # кортежи (start, end, label, value)
+    merged = list(base)
 
     for ai_ent in ai:
         ai_start = ai_ent["start"]
@@ -292,7 +299,6 @@ def merge_entity_lists(
         ]
 
         if not overlaps:
-            # Новая сущность — добавляем как кортеж
             merged.append((ai_start, ai_end, ai_label, ai_text))
         else:
             if log_conflicts:
@@ -318,7 +324,6 @@ class AINer:
 
         ai_ner = AINer(mode="ollama")
         entities = ai_ner.extract(text)  # список dict
-        # или сразу мёрджим с базовым списком кортежей:
         merged = merge_entity_lists(base_entities, entities)
     """
 
@@ -337,7 +342,7 @@ class AINer:
         Извлечь сущности из текста.
 
         Возвращает список словарей text/label/start/end/confidence/source.
-        Исключения OllamaUnavailableError / OllamaParseError / Exception
+        Исключения OllamaUnavailableError / OllamaTimeoutError / OllamaParseError
         пробрасываются наверх — обрабатывает вызывающий код (UI).
         """
         if self.mode == "off" or not text.strip():
@@ -352,7 +357,7 @@ class AINer:
         if self.mode == "gliner":
             result = _run_gliner(text)
         elif self.mode == "ollama":
-            result = _run_ollama(text)   # может бросить OllamaUnavailableError
+            result = _run_ollama(text)
         else:
             result = []
 

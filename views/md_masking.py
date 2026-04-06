@@ -8,6 +8,9 @@ Ollama AI NER — доступна при запущенном Ollama (localhost
 """
 from __future__ import annotations
 
+import time
+import threading
+
 import streamlit as st
 from ui.step_indicator import render_steps, STEPS_MD_MASK
 
@@ -17,21 +20,18 @@ _STAGE_REVIEW  = "review"
 _STAGE_RESULT  = "result"
 
 _FILE_NAME   = "md_mask_file_name"
-_FILE_TEXT   = "md_mask_file_text"    # уже сконвертированный MD-текст
+_FILE_TEXT   = "md_mask_file_text"
 _ANON_TEXT   = "md_mask_anon_text"
 _MAPPING     = "md_mask_mapping"
 _ENTITIES    = "md_mask_entities"
 _AI_DONE     = "md_mask_ai_done"
 _AI_DELTA    = "md_mask_ai_delta"
-_CONV_WARN   = "md_mask_conv_warn"    # предупреждение от конвертера (OCR и т.п.)
+_CONV_WARN   = "md_mask_conv_warn"
 
-# Флаг: True = блок Ollama виден, False = скрыт за expander «в разработке»
 _OLLAMA_ENABLED = True
 
-# Форматы, принимаемые file_uploader
 _ACCEPTED_TYPES = ["md", "txt", "pdf", "docx", "doc", "pptx", "odt"]
 
-# Человекочитаемые названия форматов (для подсказки в UI)
 _TYPE_LABELS = {
     "md":   "Markdown",
     "txt":  "Текст (TXT)",
@@ -75,6 +75,9 @@ _LANG_OPTIONS = {
     "Только английский":    "eng",
 }
 
+# Таймаут должен совпадать с _TIMEOUT в core/ai_ner.py
+_OLLAMA_TIMEOUT_SEC = 300
+
 
 def render() -> None:
     st.header("Маскирование документов")
@@ -108,7 +111,6 @@ def _render_upload() -> None:
     ext = uploaded.name.rsplit(".", 1)[-1].lower() if "." in uploaded.name else ""
     is_pdf = ext == "pdf"
 
-    # --- PDF-опции: OCR ---
     force_ocr = False
     ocr_lang  = "rus+eng"
     if is_pdf:
@@ -135,7 +137,6 @@ def _render_upload() -> None:
     if st.button("Загрузить и анализировать", type="primary", use_container_width=True):
         file_bytes = uploaded.read()
 
-        # --- Конвертация ---
         needs_conversion = ext not in ("md", "txt")
         if needs_conversion:
             label = _TYPE_LABELS.get(ext, ext.upper())
@@ -162,7 +163,6 @@ def _render_upload() -> None:
             )
             return
 
-        # --- Детектирование ---
         with st.spinner("Ищем чувствительные данные…"):
             from core.md_anonymizer import detect_entities
             entities = detect_entities(text)
@@ -188,7 +188,6 @@ def _render_review() -> None:
     file_name = st.session_state.get(_FILE_NAME, "файл")
     conv_warn = st.session_state.get(_CONV_WARN)
 
-    # --- Инфо о конвертации ---
     ext = file_name.rsplit(".", 1)[-1].lower() if "." in file_name else ""
     if ext not in ("md", "txt"):
         emoji = _FILE_EMOJI.get(ext, "📄")
@@ -203,9 +202,6 @@ def _render_review() -> None:
 
     st.subheader(f"Найденные чувствительные данные: {file_name}")
 
-    # -------------------------------------------------------------------
-    # Блок Ollama
-    # -------------------------------------------------------------------
     if _OLLAMA_ENABLED:
         _render_ollama_block(text)
     else:
@@ -225,7 +221,6 @@ def _render_review() -> None:
 
     st.markdown("---")
 
-    # --- Список сущностей ---
     by_label: dict[str, list[str]] = {}
     for _, _, label, value in entities:
         by_label.setdefault(label, [])
@@ -256,7 +251,6 @@ def _render_review() -> None:
                     unsafe_allow_html=True,
                 )
 
-    # --- Доп. термины ---
     st.markdown("---")
     st.markdown("Дополнительные слова и фразы для маскировки")
     st.text_area(
@@ -266,7 +260,6 @@ def _render_review() -> None:
         placeholder="Проект Альфа, сервер БД, филиал №3",
     )
 
-    # --- Навигация ---
     col_back, col_anon = st.columns([1, 1])
     with col_back:
         if st.button("Назад", use_container_width=True):
@@ -340,37 +333,102 @@ def _render_ollama_block(text: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Ollama helper
+# Ollama helper — запуск с прогресс-баром и таймером
 # ---------------------------------------------------------------------------
 
 def _run_ollama_and_merge(text: str) -> None:
-    from core.ai_ner import AINer, merge_entity_lists, OllamaUnavailableError, OllamaParseError
+    from core.ai_ner import (
+        AINer, merge_entity_lists,
+        OllamaUnavailableError, OllamaTimeoutError, OllamaParseError,
+    )
+
     base_entities = st.session_state.get(_ENTITIES, [])
     base_count    = len(base_entities)
 
-    with st.spinner("Ollama анализирует текст… Это может занять 15–180 секунд."):
+    # --- UI: прогресс-бар + счётчик времени ---
+    status_text = st.empty()
+    progress_bar = st.progress(0)
+    hint_text = st.empty()
+
+    # Результат и ошибка передаются через изменяемый dict (thread-safe для чтения)
+    result_box: dict = {"entities": None, "error": None, "done": False}
+
+    def _worker() -> None:
         try:
             ner = AINer(mode="ollama")
-            ai_entities = ner.extract(text)
-        except OllamaUnavailableError as exc:
+            result_box["entities"] = ner.extract(text)
+        except Exception as exc:  # noqa: BLE001
+            result_box["error"] = exc
+        finally:
+            result_box["done"] = True
+
+    thread = threading.Thread(target=_worker, daemon=True)
+    thread.start()
+
+    start_ts = time.monotonic()
+    tick = 0
+
+    # Тикаем каждую секунду, пока поток не завершится
+    while not result_box["done"]:
+        elapsed = int(time.monotonic() - start_ts)
+        pct = min(elapsed / _OLLAMA_TIMEOUT_SEC, 0.97)  # не доходим до 100% до реального финиша
+
+        progress_bar.progress(pct)
+        status_text.markdown(
+            f"⏳ **Ollama анализирует текст…** &nbsp; `{elapsed} / {_OLLAMA_TIMEOUT_SEC} сек`"
+        )
+
+        # Подсказки по ходу ожидания
+        if elapsed < 15:
+            hint_text.caption("Если модель загружается впервые — это займёт чуть больше времени.")
+        elif elapsed < 60:
+            hint_text.caption("Модель обрабатывает текст. Пожалуйста, не закрывайте страницу.")
+        elif elapsed < 120:
+            hint_text.caption("⚠️ Уже больше минуты. Возможно, документ большой или модель медленная.")
+        else:
+            hint_text.caption(
+                f"⚠️ Ожидание {elapsed} сек. При таймауте {_OLLAMA_TIMEOUT_SEC} сек "
+                "будет показана ошибка и базовый список сохранится."
+            )
+
+        time.sleep(1)
+        tick += 1
+
+    # Финализируем прогресс-бар
+    elapsed_total = int(time.monotonic() - start_ts)
+    progress_bar.progress(1.0)
+    status_text.empty()
+    hint_text.empty()
+    progress_bar.empty()
+
+    # --- Обработка результата ---
+    err = result_box["error"]
+    if err is not None:
+        if isinstance(err, OllamaTimeoutError):
             st.error(
-                f"**Ollama недоступна.**\n\n{exc}\n\n"
+                f"**⏰ Ollama не успела ответить за {_OLLAMA_TIMEOUT_SEC} сек** "
+                f"(прошло {elapsed_total} сек).\n\n"
+                f"{err}\n\n"
+                "Базовый список сущностей сохранён — можно продолжить без Ollama.",
+                icon="⏰",
+            )
+        elif isinstance(err, OllamaUnavailableError):
+            st.error(
+                f"**Ollama недоступна.**\n\n{err}\n\n"
                 "Базовый список сущностей сохранён — можно продолжить без Ollama.",
                 icon="🔴",
             )
-            return
-        except OllamaParseError as exc:
+        elif isinstance(err, OllamaParseError):
             st.error(
-                f"**Ollama вернула некорректный ответ.**\n\n{exc}\n\n"
+                f"**Ollama вернула некорректный ответ.**\n\n{err}\n\n"
                 "Попробуйте снова или используйте другую модель.",
                 icon="🟠",
             )
-            return
-        except Exception as exc:
-            st.error(f"**Неожиданная ошибка Ollama:** {exc}", icon="🔴")
-            return
+        else:
+            st.error(f"**Неожиданная ошибка Ollama:** {err}", icon="🔴")
+        return
 
-    merged = merge_entity_lists(base_entities, ai_entities)
+    merged = merge_entity_lists(base_entities, result_box["entities"])
     st.session_state[_ENTITIES] = merged
     st.session_state[_AI_DONE]  = True
     st.session_state[_AI_DELTA] = len(merged) - base_count
@@ -385,12 +443,10 @@ def _render_result() -> None:
     anon_text = st.session_state[_ANON_TEXT]
     mapping   = st.session_state[_MAPPING]
     file_name = st.session_state.get(_FILE_NAME, "файл")
-    # Имя выходного файла всегда .md независимо от входного формата
     base = file_name.rsplit(".", 1)[0] if "." in file_name else file_name
 
     st.subheader("Результат маскирования")
 
-    # --- Метрики ---
     cols = st.columns(max(len(mapping), 1))
     for i, (label, items) in enumerate(mapping.items()):
         cols[i % len(cols)].metric(label, len(items))
