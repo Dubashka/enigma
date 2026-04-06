@@ -135,18 +135,27 @@ def _run_gliner(text: str) -> list[dict]:
 # Ollama-бэкенд
 # ---------------------------------------------------------------------------
 
-_OLLAMA_SYSTEM_PROMPT = """Ты — система извлечения именованных сущностей из текста.
-Найди все конфиденциальные данные в тексте и верни ТОЛЬКО JSON-массив объектов.
-Каждый объект должен иметь поля:
-  "text"       — точная подстрока из исходного текста
-  "label"      — одна из меток: ФИО, ОРГ, АДРЕС, ТЕЛЕФОН, EMAIL, ДАТА,
-                 ПАСПОРТ, ИНН, СНИЛС, ДОГОВОР
-  "start"      — позиция начала (0-based, символы)
-  "end"        — позиция конца (не включая)
-  "confidence" — "high", "medium" или "low"
+_OLLAMA_SYSTEM_PROMPT = """\
+Ты — система извлечения именованных сущностей (NER) из текста на русском языке.
 
-Если ничего не найдено — верни пустой массив [].
-Не добавляй никаких пояснений — только JSON."""
+Найди все конфиденциальные персональные данные и верни ТОЛЬКО JSON-массив.
+Никакого вступления, никаких пояснений — ТОЛЬКО сам массив.
+
+Каждый элемент массива — объект со следующими полями:
+  "text"       — точная подстрока из исходного текста (копируй дословно)
+  "label"      — одна из меток: ФИО, ОРГ, АДРЕС, ТЕЛЕФОН, EMAIL, ДАТА, ПАСПОРТ, ИНН, СНИЛС, ДОГОВОР
+  "start"      — целое число: позиция первого символа в исходном тексте (0-based)
+  "end"        — целое число: позиция символа ПОСЛЕ последнего (не включая)
+  "confidence" — строка: "high", "medium" или "low"
+
+Пример ответа (структура обязательна):
+[
+  {"text": "Иванов Иван Иванович", "label": "ФИО", "start": 10, "end": 30, "confidence": "high"},
+  {"text": "ООО «Ромашка»", "label": "ОРГ", "start": 45, "end": 58, "confidence": "high"}
+]
+
+Если конфиденциальных данных не найдено — верни пустой массив: []
+"""
 
 
 class OllamaUnavailableError(RuntimeError):
@@ -157,12 +166,27 @@ class OllamaParseError(RuntimeError):
     """Пробрасывается в UI, если ответ не удалось разобрать."""
 
 
+def _extract_json_array(content: str) -> str:
+    """Вырезает JSON-массив из ответа модели.
+
+    Модель может обернуть массив в markdown-блок или добавить пояснительный текст.
+    Ищем первый '[' и последний ']' и возвращаем всё между ними.
+    """
+    # Убираем markdown-обёртку ```json ... ```
+    content = re.sub(r"```(?:json)?|```", "", content).strip()
+    start = content.find("[")
+    end   = content.rfind("]")
+    if start == -1 or end == -1 or end < start:
+        return "[]"
+    return content[start : end + 1]
+
+
 def _run_ollama(text: str) -> list[dict]:
     """Вызов Ollama REST API.
 
     Raises:
         OllamaUnavailableError — если сервер недоступен или таймаут
-        OllamaParseError       — если ответ не является валидным JSON
+        OllamaParseError       — если ответ не является валидным JSON-массивом
     """
     payload = {
         "model": _OLLAMA_MODEL,
@@ -171,7 +195,9 @@ def _run_ollama(text: str) -> list[dict]:
             {"role": "user",   "content": text},
         ],
         "stream": False,
-        "format": "json",
+        # "format": "json" намеренно убран: это поле принуждает Ollama генерировать
+        # объект {}, игнорируя промпт с просьбой вернуть массив [].
+        # Формат задаётся через системный промпт с примером.
         "keep_alive": _KEEP_ALIVE,
     }
     try:
@@ -196,11 +222,16 @@ def _run_ollama(text: str) -> list[dict]:
 
     try:
         content = resp.json()["message"]["content"]
-        # Модель может обернуть JSON в markdown-блок
-        json_str = re.sub(r"```(?:json)?|```", "", content).strip()
+        json_str = _extract_json_array(content)
         raw_list = json.loads(json_str)
+        if not isinstance(raw_list, list):
+            raise OllamaParseError(
+                f"Ollama вернула не массив, а {type(raw_list).__name__}.\n\nОтвет:\n{content!r}"
+            )
     except (KeyError, json.JSONDecodeError) as exc:
-        raise OllamaParseError(f"Не удалось разобрать ответ Ollama: {exc}\n\nОтвет:\n{content!r}")
+        raise OllamaParseError(
+            f"Не удалось разобрать ответ Ollama: {exc}\n\nОтвет:\n{content!r}"
+        )
 
     results: list[dict] = []
     for item in raw_list:
