@@ -25,6 +25,7 @@ _MAPPING     = "md_mask_mapping"
 _ENTITIES    = "md_mask_entities"
 _AI_DONE     = "md_mask_ai_done"
 _AI_DELTA    = "md_mask_ai_delta"
+_AI_REMOVED  = "md_mask_ai_removed"
 _CONV_WARN   = "md_mask_conv_warn"
 
 _OLLAMA_ENABLED = True
@@ -171,6 +172,7 @@ def _render_upload() -> None:
         st.session_state[_ENTITIES]  = entities
         st.session_state[_AI_DONE]   = False
         st.session_state[_AI_DELTA]  = 0
+        st.session_state[_AI_REMOVED] = 0
         st.session_state[_CONV_WARN] = conv_warning
         st.session_state[_STAGE]     = _STAGE_REVIEW
         st.rerun()
@@ -292,8 +294,9 @@ def _render_review() -> None:
 # ---------------------------------------------------------------------------
 
 def _render_ollama_block(text: str) -> None:
-    ai_done  = st.session_state.get(_AI_DONE, False)
-    ai_delta = st.session_state.get(_AI_DELTA, 0)
+    ai_done    = st.session_state.get(_AI_DONE, False)
+    ai_delta   = st.session_state.get(_AI_DELTA, 0)
+    ai_removed = st.session_state.get(_AI_REMOVED, 0)
 
     st.markdown("---")
     ai_col1, ai_col2 = st.columns([2, 3])
@@ -305,22 +308,28 @@ def _render_ollama_block(text: str) -> None:
             use_container_width=True,
             key="btn_ollama",
             help=(
-                "Запустить локальную LLM (Ollama) для поиска дополнительных сущностей. "
+                "Запустить локальную LLM (Ollama) для проверки базового списка "
+                "и поиска новых сущностей. Ollama уберёт OCR-мусор и ложные срабатывания, "
+                "а также найдёт то, что пропустил базовый сканер. "
                 "Требует запущенного Ollama на localhost:11434."
             ),
         )
     with ai_col2:
         if ai_done:
-            msg = (
-                f"Ollama нашла **{ai_delta}** новых сущностей — список обновлён."
-                if ai_delta else
-                "Ollama завершила анализ. Новых сущностей сверх базовых не найдено."
-            )
+            parts = []
+            if ai_delta > 0:
+                parts.append(f"добавлено **+{ai_delta}**")
+            elif ai_delta == 0:
+                parts.append("новых не найдено")
+            if ai_removed > 0:
+                parts.append(f"удалено мусора **−{ai_removed}**")
+            msg = "Ollama завершила анализ: " + ", ".join(parts) + ". Список обновлён."
             st.success(msg, icon="✅")
         else:
             st.info(
                 "Базовое сканирование выполнено (Natasha + Presidio + regex). "
-                "Нажмите кнопку слева, чтобы запустить Ollama.",
+                "Нажмите кнопку слева, чтобы запустить Ollama — она проверит список "
+                "и уберёт ложные срабатывания.",
                 icon="ℹ️",
             )
 
@@ -337,12 +346,9 @@ def _render_ollama_block(text: str) -> None:
 
 def _run_ollama_and_merge(text: str) -> None:
     """
-    Запускает Ollama в фоновом потоке и ждёт его завершения через thread.join(timeout).
-
-    thread.join() НЕ блокирует Streamlit — после возврата управление
-    сразу передаётся дальше, и Streamlit может завершить рендер-цикл.
-    Если поток не завершился за _OLLAMA_TIMEOUT_SEC — явно выбрасываем
-    OllamaTimeoutError, не дожидаясь ответа requests внутри потока.
+    Запускает Ollama в фоновом потоке с передачей базового списка.
+    Ollama возвращает confirmed / false_positives / new.
+    false_positives удаляются из базового списка, new — добавляются.
     """
     from core.ai_ner import (
         AINer, merge_entity_lists,
@@ -352,12 +358,15 @@ def _run_ollama_and_merge(text: str) -> None:
     base_entities = st.session_state.get(_ENTITIES, [])
     base_count    = len(base_entities)
 
-    result_box: dict = {"entities": None, "error": None}
+    result_box: dict = {"new_entities": None, "fp_indices": None, "error": None}
 
     def _worker() -> None:
         try:
             ner = AINer(mode="ollama")
-            result_box["entities"] = ner.extract(text)
+            # Передаём базовый список — Ollama вернёт (new_entities, fp_indices)
+            new_entities, fp_indices = ner.extract(text, base_entities=base_entities)
+            result_box["new_entities"] = new_entities
+            result_box["fp_indices"]   = fp_indices
         except Exception as exc:  # noqa: BLE001
             result_box["error"] = exc
 
@@ -369,25 +378,20 @@ def _run_ollama_and_merge(text: str) -> None:
         "Не закрывайте страницу."
     )
     with st.spinner(spinner_msg):
-        # join(timeout) отдаёт управление обратно через _OLLAMA_TIMEOUT_SEC секунд
-        # вне зависимости от того, завершился ли поток.
-        # Это НЕ блокирует Streamlit — spinner держит render-цикл живым.
         thread.join(timeout=_OLLAMA_TIMEOUT_SEC)
 
-    # Если поток всё ещё жив — считаем это таймаутом
     if thread.is_alive():
         st.error(
             f"**⏰ Ollama не успела ответить за {_OLLAMA_TIMEOUT_SEC} сек.**\n\n"
-            f"Возможные причины:\n"
-            f"• Модель ещё загружается — попробуйте снова через минуту.\n"
-            f"• Документ слишком большой — разбейте на части.\n"
-            f"• Не хватает RAM/VRAM.\n\n"
+            "Возможные причины:\n"
+            "• Модель ещё загружается — попробуйте снова через минуту.\n"
+            "• Документ слишком большой — разбейте на части.\n"
+            "• Не хватает RAM/VRAM.\n\n"
             "Базовый список сущностей сохранён — можно продолжить без Ollama.",
             icon="⏰",
         )
         return
 
-    # Поток завершился — проверяем ошибку
     err = result_box["error"]
     if err is not None:
         if isinstance(err, OllamaTimeoutError):
@@ -412,10 +416,19 @@ def _run_ollama_and_merge(text: str) -> None:
             st.error(f"**Неожиданная ошибка Ollama:** {err}", icon="🔴")
         return
 
-    merged = merge_entity_lists(base_entities, result_box["entities"] or [])
-    st.session_state[_ENTITIES] = merged
-    st.session_state[_AI_DONE]  = True
-    st.session_state[_AI_DELTA] = len(merged) - base_count
+    new_entities = result_box["new_entities"] or []
+    fp_indices   = result_box["fp_indices"] or set()
+
+    merged = merge_entity_lists(
+        base_entities,
+        new_entities,
+        exclude_indices=fp_indices,
+    )
+
+    st.session_state[_ENTITIES]   = merged
+    st.session_state[_AI_DONE]    = True
+    st.session_state[_AI_DELTA]   = len(merged) - (base_count - len(fp_indices))
+    st.session_state[_AI_REMOVED] = len(fp_indices)
 
 
 # ---------------------------------------------------------------------------
@@ -476,7 +489,7 @@ def _render_result() -> None:
 
 def _reset() -> None:
     for key in [_STAGE, _FILE_NAME, _FILE_TEXT, _ANON_TEXT, _MAPPING,
-                _ENTITIES, _AI_DONE, _AI_DELTA, _CONV_WARN]:
+                _ENTITIES, _AI_DONE, _AI_DELTA, _AI_REMOVED, _CONV_WARN]:
         st.session_state.pop(key, None)
     for label in ALL_LABELS:
         st.session_state.pop(f"md_label_{label}", None)

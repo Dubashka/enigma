@@ -22,6 +22,7 @@ AI-модуль NER для проекта Enigma.
 merge_entity_lists() принимает:
   base — список кортежей (start, end, label, value)   ← формат detect_entities()
   ai   — список словарей (формат extract() выше)
+  exclude_indices — множество индексов base, помеченных Ollama как ложноположительные
 и возвращает объединённый список кортежей.
 """
 
@@ -132,9 +133,10 @@ def _run_gliner(text: str) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Ollama-бэкенд
+# Ollama-бэкенды
 # ---------------------------------------------------------------------------
 
+# Простой промпт — без базового списка (использовался раньше, оставлен для GLiNER-режима)
 _OLLAMA_SYSTEM_PROMPT = """\
 Ты — система извлечения именованных сущностей (NER) из текста на русском языке.
 
@@ -157,6 +159,62 @@ _OLLAMA_SYSTEM_PROMPT = """\
 Если конфиденциальных данных не найдено — верни пустой массив: []
 """
 
+# Расширенный промпт — получает базовый список и возвращает три секции
+_OLLAMA_SYSTEM_PROMPT_WITH_BASE = """\
+Ты — система проверки и расширения результатов NER (извлечения именованных сущностей) \
+из текста на русском языке.
+
+Тебе будет передан:
+1. Текст документа
+2. Список сущностей, уже найденных базовым сканером (Natasha + Presidio + regex) — \
+каждая сущность содержит индекс (idx), значение (value) и метку (label)
+
+Твоя задача — вернуть ТОЛЬКО JSON-объект с тремя полями:
+
+  "confirmed"       — массив idx из базового списка, которые являются НАСТОЯЩИМИ \
+персональными данными (оставить)
+  "false_positives" — массив idx из базового списка, которые являются ОШИБОЧНЫМИ \
+срабатываниями (удалить): OCR-мусор, обрывки слов, должности, \
+неперсональные слова
+  "new"             — массив НОВЫХ сущностей, которых нет в базовом списке, \
+но которые являются персональными данными
+
+Формат каждого элемента в "new":
+  "text"       — точная подстрока из исходного текста
+  "label"      — одна из меток: ФИО, ОРГ, АДРЕС, ТЕЛЕФОН, EMAIL, ДАТА, ПАСПОРТ, ИНН, СНИЛС, ДОГОВОР
+  "start"      — целое число: позиция первого символа (0-based)
+  "end"        — целое число: позиция символа ПОСЛЕ последнего
+  "confidence" — строка: "high", "medium" или "low"
+
+Правила для false_positives:
+- OCR-мусор: короткие бессмысленные строки ("Зо", "БЕсТв", "Ра ;.")
+- Обрывки слов из-за переноса строк
+- Должности и роли ("Руководителя центра", "Директора", "Блока") — они НЕ персональные данные
+- Слова, написанные ТОЛЬКО заглавными буквами, если это не аббревиатура организации \
+("РАБОТ", "СТОРОН")
+- Названия разделов и заголовков документа
+
+Правила для confirmed:
+- ФИО: полные имена, инициалы ("Федосов П.В.", "Скорочкин А.А.")
+- ОРГ: реальные названия организаций с правовой формой \
+("ПАО «МТС»", "ООО «Рексофт»")
+- Телефоны, email, адреса, даты, номера документов
+
+Пример ответа:
+{
+  "confirmed": [0, 1, 3, 5],
+  "false_positives": [2, 4],
+  "new": [
+    {"text": "г. Москва, ул. Лазо, д. 3А", "label": "АДРЕС", \
+"start": 820, "end": 846, "confidence": "high"}
+  ]
+}
+
+Если нет ложноположительных — "false_positives": []
+Если нет новых — "new": []
+ТОЛЬКО JSON-объект, никакого другого текста.
+"""
+
 
 class OllamaUnavailableError(RuntimeError):
     """Пробрасывается в UI, если Ollama недоступна."""
@@ -171,11 +229,7 @@ class OllamaParseError(RuntimeError):
 
 
 def _extract_json_array(content: str) -> str:
-    """Вырезает JSON-массив из ответа модели.
-
-    Модель может обернуть массив в markdown-блок или добавить пояснительный текст.
-    Ищем первый '[' и последний ']' и возвращаем всё между ними.
-    """
+    """Вырезает JSON-массив из ответа модели."""
     content = re.sub(r"```(?:json)?|```", "", content).strip()
     start = content.find("[")
     end   = content.rfind("]")
@@ -184,13 +238,31 @@ def _extract_json_array(content: str) -> str:
     return content[start : end + 1]
 
 
+def _extract_json_object(content: str) -> str:
+    """Вырезает JSON-объект из ответа модели."""
+    content = re.sub(r"```(?:json)?|```", "", content).strip()
+    start = content.find("{")
+    end   = content.rfind("}")
+    if start == -1 or end == -1 or end < start:
+        return "{}"
+    return content[start : end + 1]
+
+
+def _build_base_description(base: list[tuple]) -> str:
+    """Сериализует базовый список в читаемый текст для промпта."""
+    lines = []
+    for idx, (start, end, label, value) in enumerate(base):
+        lines.append(f"  idx={idx}  label={label}  value={value!r}  pos={start}-{end}")
+    return "\n".join(lines) if lines else "  (пусто)"
+
+
 def _run_ollama(text: str) -> list[dict]:
-    """Вызов Ollama REST API.
+    """Простой вызов Ollama без базового списка (используется GLiNER-режимом).
 
     Raises:
-        OllamaTimeoutError     — если модель не ответила за _TIMEOUT секунд
-        OllamaUnavailableError — если сервер недоступен или HTTP-ошибка
-        OllamaParseError       — если ответ не является валидным JSON-массивом
+        OllamaTimeoutError     — таймаут
+        OllamaUnavailableError — сервер недоступен
+        OllamaParseError       — невалидный JSON
     """
     payload = {
         "model": _OLLAMA_MODEL,
@@ -199,9 +271,6 @@ def _run_ollama(text: str) -> list[dict]:
             {"role": "user",   "content": text},
         ],
         "stream": False,
-        # "format": "json" намеренно убран: это поле принуждает Ollama генерировать
-        # объект {}, игнорируя промпт с просьбой вернуть массив [].
-        # Формат задаётся через системный промпт с примером.
         "keep_alive": _KEEP_ALIVE,
     }
     try:
@@ -220,7 +289,7 @@ def _run_ollama(text: str) -> list[dict]:
         raise OllamaTimeoutError(
             f"Ollama не ответила за {_TIMEOUT} секунд.\n"
             f"Возможные причины:\n"
-            f"• Модель {_OLLAMA_MODEL!r} ещё загружается в первый раз — попробуйте снова через минуту.\n"
+            f"• Модель {_OLLAMA_MODEL!r} ещё загружается — попробуйте снова через минуту.\n"
             f"• Документ слишком большой — попробуйте разбить на части.\n"
             f"• Не хватает RAM/VRAM для модели."
         )
@@ -261,6 +330,122 @@ def _run_ollama(text: str) -> list[dict]:
     return results
 
 
+def _run_ollama_with_base(
+    text: str,
+    base: list[tuple],
+) -> tuple[list[dict], set[int]]:
+    """Вызов Ollama с передачей базового списка.
+
+    Модель получает текст + базовый список и возвращает JSON-объект с тремя секциями:
+      confirmed       — индексы base, которые являются настоящими ПДн (оставить)
+      false_positives — индексы base, которые являются мусором (удалить)
+      new             — новые сущности, не вошедшие в base
+
+    Возвращает:
+      (new_entities, false_positive_indices)
+      new_entities           — список dict в формате extract()
+      false_positive_indices — множество int-индексов base для удаления
+
+    Raises:
+        OllamaTimeoutError     — таймаут
+        OllamaUnavailableError — сервер недоступен
+        OllamaParseError       — невалидный JSON в ответе
+    """
+    base_description = _build_base_description(base)
+    user_message = (
+        f"=== БАЗОВЫЙ СПИСОК СУЩНОСТЕЙ (найдено автоматически) ===\n"
+        f"{base_description}\n\n"
+        f"=== ТЕКСТ ДОКУМЕНТА ===\n"
+        f"{text}"
+    )
+
+    payload = {
+        "model": _OLLAMA_MODEL,
+        "messages": [
+            {"role": "system", "content": _OLLAMA_SYSTEM_PROMPT_WITH_BASE},
+            {"role": "user",   "content": user_message},
+        ],
+        "stream": False,
+        "keep_alive": _KEEP_ALIVE,
+    }
+
+    try:
+        resp = requests.post(
+            f"{_OLLAMA_URL}/api/chat",
+            json=payload,
+            timeout=_TIMEOUT,
+        )
+        resp.raise_for_status()
+    except requests.exceptions.ConnectionError:
+        raise OllamaUnavailableError(
+            f"Ollama недоступна по адресу {_OLLAMA_URL}.\n"
+            "Запустите сервер командой: ollama serve"
+        )
+    except requests.exceptions.Timeout:
+        raise OllamaTimeoutError(
+            f"Ollama не ответила за {_TIMEOUT} секунд.\n"
+            f"Возможные причины:\n"
+            f"• Модель {_OLLAMA_MODEL!r} ещё загружается — попробуйте снова через минуту.\n"
+            f"• Документ слишком большой — попробуйте разбить на части.\n"
+            f"• Не хватает RAM/VRAM для модели."
+        )
+    except requests.exceptions.HTTPError as exc:
+        raise OllamaUnavailableError(f"Ollama вернула HTTP-ошибку: {exc}")
+
+    try:
+        content = resp.json()["message"]["content"]
+        json_str = _extract_json_object(content)
+        parsed = json.loads(json_str)
+        if not isinstance(parsed, dict):
+            raise OllamaParseError(
+                f"Ollama вернула не объект, а {type(parsed).__name__}.\n\nОтвет:\n{content!r}"
+            )
+    except (KeyError, json.JSONDecodeError) as exc:
+        raise OllamaParseError(
+            f"Не удалось разобрать ответ Ollama: {exc}\n\nОтвет:\n{content!r}"
+        )
+
+    # Разбираем false_positives
+    fp_raw = parsed.get("false_positives", [])
+    false_positive_indices: set[int] = set()
+    if isinstance(fp_raw, list):
+        for idx in fp_raw:
+            try:
+                false_positive_indices.add(int(idx))
+            except (TypeError, ValueError) as exc:
+                logger.warning("Ollama: некорректный индекс false_positive: %s (%s)", idx, exc)
+
+    if false_positive_indices:
+        removed = [(i, base[i]) for i in sorted(false_positive_indices) if i < len(base)]
+        logger.info(
+            "Ollama: помечено %d ложноположительных: %s",
+            len(removed),
+            [(v for _, (_, _, _, v) in removed)],
+        )
+
+    # Разбираем new
+    new_raw = parsed.get("new", [])
+    new_entities: list[dict] = []
+    if isinstance(new_raw, list):
+        conf_map = {"high": 0.9, "medium": 0.6, "low": 0.3}
+        for item in new_raw:
+            try:
+                start = int(item["start"])
+                end   = int(item["end"])
+                new_entities.append({
+                    "text":       item.get("text") or text[start:end],
+                    "label":      item.get("label", ""),
+                    "start":      start,
+                    "end":        end,
+                    "confidence": conf_map.get(str(item.get("confidence", "low")), 0.3),
+                    "source":     "ollama",
+                })
+            except (KeyError, TypeError, ValueError) as exc:
+                logger.warning("Ollama: пропущена новая сущность из-за ошибки: %s", exc)
+
+    return new_entities, false_positive_indices
+
+
 # ---------------------------------------------------------------------------
 # Объединение + дедупликация по перекрытию span
 # ---------------------------------------------------------------------------
@@ -272,20 +457,35 @@ def _spans_overlap(a_start: int, a_end: int, b_start: int, b_end: int) -> bool:
 def merge_entity_lists(
     base: list[tuple],
     ai: list[dict],
+    exclude_indices: set[int] | None = None,
     log_conflicts: bool = True,
 ) -> list[tuple]:
     """
     Объединение двух списков сущностей с дедупликацией по позиции.
 
-    base — кортежи (start, end, label, value) из detect_entities()
-    ai   — словари {start, end, label, text, ...} из AINer.extract()
+    base            — кортежи (start, end, label, value) из detect_entities()
+    ai              — словари {start, end, label, text, ...} из AINer.extract()
+    exclude_indices — множество индексов base, помеченных Ollama как
+                      ложноположительные (OCR-мусор, неверные срабатывания);
+                      эти элементы удаляются перед слиянием
 
     Возвращает список кортежей (start, end, label, value) —
     тот же формат, что и detect_entities(), чтобы anonymize() его принял.
-
-    При конфликте меток (одна позиция, разные метки) — логируем, оставляем оба варианта.
     """
-    merged = list(base)
+    # Фильтруем ложноположительные из базового списка
+    if exclude_indices:
+        filtered_base = [
+            ent for i, ent in enumerate(base)
+            if i not in exclude_indices
+        ]
+        logger.info(
+            "merge_entity_lists: удалено %d ложноположительных из base (%d → %d)",
+            len(base) - len(filtered_base), len(base), len(filtered_base),
+        )
+    else:
+        filtered_base = list(base)
+
+    merged = list(filtered_base)
 
     for ai_ent in ai:
         ai_start = ai_ent["start"]
@@ -320,11 +520,17 @@ class AINer:
     """
     Оболочка для AI-этапа NER.
 
-    Использование::
+    Использование (с базовым списком — рекомендуется для Ollama)::
 
         ai_ner = AINer(mode="ollama")
-        entities = ai_ner.extract(text)  # список dict
-        merged = merge_entity_lists(base_entities, entities)
+        new_entities, fp_indices = ai_ner.extract(text, base_entities=base)
+        merged = merge_entity_lists(base, new_entities, exclude_indices=fp_indices)
+
+    Использование без базового списка (GLiNER или старый режим)::
+
+        ai_ner = AINer(mode="gliner")
+        entities = ai_ner.extract(text)
+        merged = merge_entity_lists(base, entities)
     """
 
     def __init__(self, mode: str | None = None, use_cache: bool = True):
@@ -337,17 +543,45 @@ class AINer:
             )
             self.mode = "off"
 
-    def extract(self, text: str) -> list[dict]:
+    def extract(
+        self,
+        text: str,
+        base_entities: list[tuple] | None = None,
+    ) -> tuple[list[dict], set[int]] | list[dict]:
         """
         Извлечь сущности из текста.
 
-        Возвращает список словарей text/label/start/end/confidence/source.
+        Если передан base_entities и mode == "ollama" — использует расширенный
+        промпт с тремя секциями (confirmed / false_positives / new).
+        В этом случае возвращает кортеж (new_entities, false_positive_indices).
+
+        Без base_entities (или для GLiNER) — возвращает просто list[dict].
+
         Исключения OllamaUnavailableError / OllamaTimeoutError / OllamaParseError
         пробрасываются наверх — обрабатывает вызывающий код (UI).
         """
         if self.mode == "off" or not text.strip():
+            if base_entities is not None and self.mode == "ollama":
+                return [], set()
             return []
 
+        # Режим Ollama с базовым списком — расширенный промпт
+        if self.mode == "ollama" and base_entities is not None:
+            cache_key = _cache_key(text + str([(s, e, l) for s, e, l, _ in base_entities]), self.mode + "_with_base")
+            if self.use_cache and cache_key in _cache:
+                logger.debug("AINer: cache hit (mode=%s+base)", self.mode)
+                cached = _cache[cache_key]
+                # cached хранится как dict с двумя ключами
+                return cached["new"], set(cached["fp"])
+
+            new_entities, fp_indices = _run_ollama_with_base(text, base_entities)
+
+            if self.use_cache:
+                _cache[cache_key] = {"new": new_entities, "fp": list(fp_indices)}
+
+            return new_entities, fp_indices
+
+        # Обычный режим (GLiNER или Ollama без base)
         if self.use_cache:
             key = _cache_key(text, self.mode)
             if key in _cache:
