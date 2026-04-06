@@ -14,7 +14,8 @@ logger = logging.getLogger(__name__)
 OLLAMA_URL   = os.environ.get("ENIGMA_OLLAMA_URL",   "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("ENIGMA_OLLAMA_MODEL", "qwen2.5:7b")
 _MAX_RETRIES = 3
-_TIMEOUT     = 60  # секунд
+_TIMEOUT     = 180  # секунд — даём время на первый холодный старт модели
+_KEEP_ALIVE  = "15m"  # держать модель в памяти между запросами
 
 
 class OllamaUnavailableError(RuntimeError):
@@ -67,6 +68,7 @@ def _call_ollama(messages: list[dict], max_tokens: int = 800) -> str:
         "model": OLLAMA_MODEL,
         "messages": messages,
         "stream": False,
+        "keep_alive": _KEEP_ALIVE,
         "options": {
             "temperature": 0,
             "num_predict": max_tokens,
