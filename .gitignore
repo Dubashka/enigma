@@ -17,3 +17,6 @@ htmlcov/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Environment variables (contains secrets — never commit)
+.env

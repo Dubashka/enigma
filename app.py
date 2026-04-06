@@ -1,4 +1,12 @@
 import pathlib
+
+# Load .env before anything else so env vars (ENIGMA_AI_NER_MODE etc.) are available
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # python-dotenv not installed — env vars must be set manually
+
 import streamlit as st
 
 st.set_page_config(
