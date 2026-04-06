@@ -9,6 +9,7 @@ Ollama AI NER — доступна при запущенном Ollama (localhost
 from __future__ import annotations
 
 import threading
+import traceback
 
 import streamlit as st
 from ui.step_indicator import render_steps, STEPS_MD_MASK
@@ -27,6 +28,9 @@ _AI_DONE     = "md_mask_ai_done"
 _AI_DELTA    = "md_mask_ai_delta"
 _AI_REMOVED  = "md_mask_ai_removed"
 _CONV_WARN   = "md_mask_conv_warn"
+# Ошибка Ollama сохраняется в session_state чтобы пережить st.rerun()
+_AI_ERROR    = "md_mask_ai_error"       # str | None — текст ошибки
+_AI_ERROR_KIND = "md_mask_ai_error_kind"  # "timeout" | "unavailable" | "parse" | "unexpected"
 
 _OLLAMA_ENABLED = True
 
@@ -174,6 +178,8 @@ def _render_upload() -> None:
         st.session_state[_AI_DELTA]  = 0
         st.session_state[_AI_REMOVED] = 0
         st.session_state[_CONV_WARN] = conv_warning
+        st.session_state.pop(_AI_ERROR, None)
+        st.session_state.pop(_AI_ERROR_KIND, None)
         st.session_state[_STAGE]     = _STAGE_REVIEW
         st.rerun()
 
@@ -294,9 +300,11 @@ def _render_review() -> None:
 # ---------------------------------------------------------------------------
 
 def _render_ollama_block(text: str) -> None:
-    ai_done    = st.session_state.get(_AI_DONE, False)
-    ai_delta   = st.session_state.get(_AI_DELTA, 0)
-    ai_removed = st.session_state.get(_AI_REMOVED, 0)
+    ai_done      = st.session_state.get(_AI_DONE, False)
+    ai_delta     = st.session_state.get(_AI_DELTA, 0)
+    ai_removed   = st.session_state.get(_AI_REMOVED, 0)
+    ai_error     = st.session_state.get(_AI_ERROR)
+    ai_error_kind = st.session_state.get(_AI_ERROR_KIND)
 
     st.markdown("---")
     ai_col1, ai_col2 = st.columns([2, 3])
@@ -325,6 +333,9 @@ def _render_ollama_block(text: str) -> None:
                 parts.append(f"удалено мусора **−{ai_removed}**")
             msg = "Ollama завершила анализ: " + ", ".join(parts) + ". Список обновлён."
             st.success(msg, icon="✅")
+        elif ai_error:
+            # Ошибка пережила rerun — показываем её
+            _show_ollama_error(ai_error_kind, ai_error)
         else:
             st.info(
                 "Базовое сканирование выполнено (Natasha + Presidio + regex). "
@@ -334,10 +345,49 @@ def _render_ollama_block(text: str) -> None:
             )
 
     if clicked and not ai_done:
+        # Сбрасываем предыдущую ошибку перед новой попыткой
+        st.session_state.pop(_AI_ERROR, None)
+        st.session_state.pop(_AI_ERROR_KIND, None)
         _run_ollama_and_merge(text)
         st.rerun()
 
     st.markdown("---")
+
+
+def _show_ollama_error(kind: str | None, message: str) -> None:
+    """Единая точка отображения ошибок Ollama."""
+    if kind == "timeout":
+        st.error(
+            f"**⏰ Ollama не успела ответить за {_OLLAMA_TIMEOUT_SEC} сек.**\n\n"
+            f"{message}\n\n"
+            "Возможные причины:\n"
+            "• Модель ещё загружается — попробуйте снова через минуту.\n"
+            "• Документ слишком большой — разбейте на части.\n"
+            "• Не хватает RAM/VRAM.\n\n"
+            "Базовый список сущностей сохранён — можно продолжить без Ollama.",
+            icon="⏰",
+        )
+    elif kind == "unavailable":
+        st.error(
+            f"**🔴 Ollama недоступна.**\n\n"
+            f"{message}\n\n"
+            "Убедитесь что Ollama запущена: `ollama serve`\n\n"
+            "Базовый список сущностей сохранён — можно продолжить без Ollama.",
+            icon="🔴",
+        )
+    elif kind == "parse":
+        st.error(
+            f"**🟠 Ollama вернула некорректный ответ (не удалось разобрать JSON).**\n\n"
+            f"{message}\n\n"
+            "Попробуйте снова или используйте другую модель.",
+            icon="🟠",
+        )
+    else:
+        st.error(
+            f"**❌ Неожиданная ошибка Ollama.**\n\n"
+            f"{message}",
+            icon="❌",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -349,6 +399,9 @@ def _run_ollama_and_merge(text: str) -> None:
     Запускает Ollama в фоновом потоке с передачей базового списка.
     Ollama возвращает confirmed / false_positives / new.
     false_positives удаляются из базового списка, new — добавляются.
+
+    Все ошибки сохраняются в session_state (_AI_ERROR / _AI_ERROR_KIND)
+    чтобы пережить вызов st.rerun() в _render_ollama_block.
     """
     from core.ai_ner import (
         AINer, merge_entity_lists,
@@ -363,7 +416,6 @@ def _run_ollama_and_merge(text: str) -> None:
     def _worker() -> None:
         try:
             ner = AINer(mode="ollama")
-            # Передаём базовый список — Ollama вернёт (new_entities, fp_indices)
             new_entities, fp_indices = ner.extract(text, base_entities=base_entities)
             result_box["new_entities"] = new_entities
             result_box["fp_indices"]   = fp_indices
@@ -380,42 +432,34 @@ def _run_ollama_and_merge(text: str) -> None:
     with st.spinner(spinner_msg):
         thread.join(timeout=_OLLAMA_TIMEOUT_SEC)
 
+    # --- Поток завис (thread.join вернул управление по таймауту) ---
     if thread.is_alive():
-        st.error(
-            f"**⏰ Ollama не успела ответить за {_OLLAMA_TIMEOUT_SEC} сек.**\n\n"
-            "Возможные причины:\n"
-            "• Модель ещё загружается — попробуйте снова через минуту.\n"
-            "• Документ слишком большой — разбейте на части.\n"
-            "• Не хватает RAM/VRAM.\n\n"
-            "Базовый список сущностей сохранён — можно продолжить без Ollama.",
-            icon="⏰",
+        st.session_state[_AI_ERROR] = (
+            f"Поток Ollama не завершился за {_OLLAMA_TIMEOUT_SEC} сек. "
+            "Модель может быть перегружена или документ слишком большой."
         )
+        st.session_state[_AI_ERROR_KIND] = "timeout"
         return
 
+    # --- Ошибка внутри потока ---
     err = result_box["error"]
     if err is not None:
+        err_text = str(err)
         if isinstance(err, OllamaTimeoutError):
-            st.error(
-                f"**⏰ Ollama вернула таймаут.**\n\n{err}\n\n"
-                "Базовый список сущностей сохранён — можно продолжить без Ollama.",
-                icon="⏰",
-            )
+            st.session_state[_AI_ERROR_KIND] = "timeout"
         elif isinstance(err, OllamaUnavailableError):
-            st.error(
-                f"**Ollama недоступна.**\n\n{err}\n\n"
-                "Базовый список сущностей сохранён — можно продолжить без Ollama.",
-                icon="🔴",
-            )
+            st.session_state[_AI_ERROR_KIND] = "unavailable"
         elif isinstance(err, OllamaParseError):
-            st.error(
-                f"**Ollama вернула некорректный ответ.**\n\n{err}\n\n"
-                "Попробуйте снова или используйте другую модель.",
-                icon="🟠",
-            )
+            st.session_state[_AI_ERROR_KIND] = "parse"
+            # Для ошибок парсинга добавляем трейсбэк — помогает при отладке
+            err_text = f"{err}\n\n```\n{traceback.format_exc()}\n```"
         else:
-            st.error(f"**Неожиданная ошибка Ollama:** {err}", icon="🔴")
+            st.session_state[_AI_ERROR_KIND] = "unexpected"
+            err_text = f"{err}\n\n```\n{traceback.format_exc()}\n```"
+        st.session_state[_AI_ERROR] = err_text
         return
 
+    # --- Успех ---
     new_entities = result_box["new_entities"] or []
     fp_indices   = result_box["fp_indices"] or set()
 
@@ -429,6 +473,9 @@ def _run_ollama_and_merge(text: str) -> None:
     st.session_state[_AI_DONE]    = True
     st.session_state[_AI_DELTA]   = len(merged) - (base_count - len(fp_indices))
     st.session_state[_AI_REMOVED] = len(fp_indices)
+    # Убираем ошибку если предыдущий запуск был неудачным
+    st.session_state.pop(_AI_ERROR, None)
+    st.session_state.pop(_AI_ERROR_KIND, None)
 
 
 # ---------------------------------------------------------------------------
@@ -489,7 +536,8 @@ def _render_result() -> None:
 
 def _reset() -> None:
     for key in [_STAGE, _FILE_NAME, _FILE_TEXT, _ANON_TEXT, _MAPPING,
-                _ENTITIES, _AI_DONE, _AI_DELTA, _AI_REMOVED, _CONV_WARN]:
+                _ENTITIES, _AI_DONE, _AI_DELTA, _AI_REMOVED, _CONV_WARN,
+                _AI_ERROR, _AI_ERROR_KIND]:
         st.session_state.pop(key, None)
     for label in ALL_LABELS:
         st.session_state.pop(f"md_label_{label}", None)
