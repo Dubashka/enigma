@@ -14,7 +14,7 @@ _RESTORED     = "md_decr_restored"
 
 
 def render() -> None:
-    st.header("Демаскирование MD")
+    st.header("Демаскирование")
     stage = st.session_state.get(_STAGE, _STAGE_UPLOAD)
     if stage == _STAGE_UPLOAD:
         _render_upload()
