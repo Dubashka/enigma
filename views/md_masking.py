@@ -212,7 +212,7 @@ def _render_review() -> None:
     if _OLLAMA_ENABLED:
         _render_ollama_block(text)
     else:
-        with st.expander("🚧 Уточнить через Ollama (в разработке)", expanded=False):
+        with st.expander("🚧 Уточнить через AI (в разработке)", expanded=False):
             st.info(
                 "🛠️ Эта функция ещё в разработке и будет доступна в ближайшем обновлении.\n\n"
                 "Позволит запустить локальную LLM-модель (Ollama) для поиска дополнительных сущностей, "
@@ -220,7 +220,7 @@ def _render_review() -> None:
                 icon="ℹ️",
             )
             st.button(
-                "🤖 Уточнить через Ollama",
+                "🤖 Уточнить через AI",
                 disabled=True,
                 use_container_width=True,
                 help="Функция в разработке — недоступна",
@@ -309,7 +309,7 @@ def _render_ollama_block(text: str) -> None:
     st.markdown("---")
     ai_col1, ai_col2 = st.columns([2, 3])
     with ai_col1:
-        btn_label = "✅ Ollama уже применена" if ai_done else "🤖 Уточнить через Ollama"
+        btn_label = "✅ AI уже применена" if ai_done else "🤖 Уточнить через AI"
         clicked = st.button(
             btn_label,
             disabled=ai_done,
@@ -331,15 +331,15 @@ def _render_ollama_block(text: str) -> None:
                 parts.append("новых не найдено")
             if ai_removed > 0:
                 parts.append(f"удалено мусора **−{ai_removed}**")
-            msg = "Ollama завершила анализ: " + ", ".join(parts) + ". Список обновлён."
+            msg = "AI завершила анализ: " + ", ".join(parts) + ". Список обновлён."
             st.success(msg, icon="✅")
         elif ai_error:
             # Ошибка пережила rerun — показываем её
             _show_ollama_error(ai_error_kind, ai_error)
         else:
             st.info(
-                "Базовое сканирование выполнено (Natasha + Presidio + regex). "
-                "Нажмите кнопку слева, чтобы запустить Ollama — она проверит список "
+                "Базовое сканирование выполнено. "
+                "Нажмите кнопку слева, чтобы запустить AI — она проверит список "
                 "и уберёт ложные срабатывания.",
                 icon="ℹ️",
             )
@@ -358,7 +358,7 @@ def _show_ollama_error(kind: str | None, message: str) -> None:
     """Единая точка отображения ошибок Ollama."""
     if kind == "timeout":
         st.error(
-            f"**⏰ Ollama не успела ответить за {_OLLAMA_TIMEOUT_SEC} сек.**\n\n"
+            f"**AI не успела ответить за {_OLLAMA_TIMEOUT_SEC} сек.**\n\n"
             f"{message}\n\n"
             "Возможные причины:\n"
             "• Модель ещё загружается — попробуйте снова через минуту.\n"
@@ -426,7 +426,7 @@ def _run_ollama_and_merge(text: str) -> None:
     thread.start()
 
     spinner_msg = (
-        f"🤖 Ollama анализирует текст… (макс. {_OLLAMA_TIMEOUT_SEC} сек)  \n"
+        f"🤖 AI анализирует текст… (макс. {_OLLAMA_TIMEOUT_SEC} сек)  \n"
         "Не закрывайте страницу."
     )
     with st.spinner(spinner_msg):
@@ -435,7 +435,7 @@ def _run_ollama_and_merge(text: str) -> None:
     # --- Поток завис (thread.join вернул управление по таймауту) ---
     if thread.is_alive():
         st.session_state[_AI_ERROR] = (
-            f"Поток Ollama не завершился за {_OLLAMA_TIMEOUT_SEC} сек. "
+            f"Поток AI не завершился за {_OLLAMA_TIMEOUT_SEC} сек. "
             "Модель может быть перегружена или документ слишком большой."
         )
         st.session_state[_AI_ERROR_KIND] = "timeout"
