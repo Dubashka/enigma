@@ -11,8 +11,21 @@ detect_entities() is NOT called again (used when Ollama was already run manually
 from __future__ import annotations
 
 import json
+import logging
 import re
+import time
 from typing import Any
+
+logger = logging.getLogger(__name__)
+
+
+def _log_timing(stage: str, elapsed: float, extra: str = "") -> None:
+    """Единый формат тайминг-лога (WARNING, чтобы было видно без настройки)."""
+    msg = f"[ENIGMA TIMING] {stage}: {elapsed:.3f}s"
+    if extra:
+        msg += f" | {extra}"
+    logger.warning(msg)
+
 
 # ---------------------------------------------------------------------------
 # Regex patterns for structured PII
@@ -76,8 +89,6 @@ _PATTERNS: list[tuple[str, str]] = [
     ("IP", r'\b(?:\d{1,3}\.){3}\d{1,3}\b'),
     (
         "\u041e\u0420\u0413",
-        # Префикс типа "ИП", "ООО" и т.д. — только как отдельное слово,
-        # не как часть другого слова ("организации", "принципы")
         _ORG_WORD_START
         + r'(?:' + _ORG_PREFIX_RE + r')'
         + _ORG_WORD_END
@@ -86,12 +97,9 @@ _PATTERNS: list[tuple[str, str]] = [
         + r'|\s+[А-ЯЁ][а-яёА-ЯЁ\w\-]{1,40}(?:\s+[А-ЯЁ][а-яёА-ЯЁ\w\-]{1,40}){0,3}'
         + r')?',
     ),
-    # ФИО с инициалами — высокая точность, не фильтруем
     ("\u0424\u0418\u041e", _C + _cl + r'+\s+' + _C + r'\.' + _C + r'\.'),
     ("\u0424\u0418\u041e", _C + r'\.' + _C + r'\.\s+' + _C + _cl + r'+'),
-    # Полное ФИО (Три слова) — ТОЛЬКО на отдельной строке
     ("\u0424\u0418\u041e", r'[А-ЯЁ][а-яё]{3,}\s+[А-ЯЁ][а-яё]{3,}\s+[А-ЯЁ][а-яё]{3,}'),
-    # ---- АДРЕС ----
     (
         "\u0410\u0414\u0420\u0415\u0421",
         _CITY_KW + r'\s+' + _CITY_NAME + r',\s*'
@@ -124,40 +132,31 @@ _GEO_STOPWORDS: frozenset[str] = frozenset({
     "район", "область", "край", "округ", "республика",
 })
 
-# ОРГ-стоп-список: нарицательные слова, которые Natasha часто
-# выдаёт за названия организаций (ORG). Малый регистр.
 _ORG_COMMON_WORDS: frozenset[str] = frozenset({
-    # Роли сторон в договорах
     "заказчик", "заказчика", "заказчику", "заказчиком",
     "исполнитель", "исполнителя", "исполнителю",
     "подрядчик", "подрядчика", "подрядчику",
     "покупатель", "поставщик", "арендодатель", "арендатор",
     "сторона", "стороны", "стороне",
-    # Документы
     "доверенность", "доверенности", "доверенностю",
     "доверенностью",
     "договор", "договора", "договору", "договором",
     "соглашение", "соглашения", "приложение",
     "акт", "счет", "заключение",
-    # Работы / услуги
     "работа", "работы", "работам",
     "услуга", "услуги", "услугам",
     "заказ", "заказа", "заказу", "заказом",
     "поставка", "оплата",
-    # Оргструктура
     "отдел", "департамент", "управление", "служба",
     "центр", "компания", "организация", "предприятие",
     "подразделение", "филиал",
-    # Должности
     "руководитель", "директор", "менеджер",
     "сотрудник", "работник", "специалист",
     "председатель", "заместитель", "начальник",
-    # Проект
     "проект", "программа", "проекты",
     "клиент", "партнер", "контрагент",
 })
 
-# ФИО-паттерны, требующие проверки (полное ФИО без инициалов)
 _FIO_STRICT_PATTERNS: frozenset[str] = frozenset({
     r'[А-ЯЁ][а-яё]{3,}\s+[А-ЯЁ][а-яё]{3,}\s+[А-ЯЁ][а-яё]{3,}',
 })
@@ -172,7 +171,6 @@ def _is_org_common_word(word: str) -> bool:
 
 
 def _is_short_line_match(text: str, match_start: int, match_end: int) -> bool:
-    """Труе если совпадение занимает всю строку (или почти всю)."""
     line_start = text.rfind("\n", 0, match_start)
     line_start = 0 if line_start == -1 else line_start + 1
     line_end = text.find("\n", match_end)
@@ -248,29 +246,49 @@ def _expand_org_spans(
 
 
 def _regex_entities(text: str) -> list[tuple[int, int, str, str]]:
+    t0 = time.perf_counter()
     found: list[tuple[int, int, str, str]] = []
     for label, pattern in _PATTERNS:
+        t_pat = time.perf_counter()
+        matches = []
         for m in re.finditer(pattern, text, flags=re.IGNORECASE):
             val = m.group()
             if label == "ФИО" and pattern in _FIO_STRICT_PATTERNS:
-                # Полное ФИО без инициалов: только на отдельной строке
                 if not _is_short_line_match(text, m.start(), m.end()):
                     continue
                 if any(_is_geo_word(w) for w in val.split()):
                     continue
-            found.append((m.start(), m.end(), label, val))
+            matches.append((m.start(), m.end(), label, val))
+        elapsed_pat = time.perf_counter() - t_pat
+        if elapsed_pat > 0.05:  # логируем только паттерны, которые тормозят > 50мс
+            logger.warning(
+                "[ENIGMA TIMING] regex pattern [%s] %.3fs | matches=%d",
+                label, elapsed_pat, len(matches),
+            )
+        found.extend(matches)
+    _log_timing("_regex_entities", time.perf_counter() - t0,
+                f"text_len={len(text)} found={len(found)}")
     return found
 
 
 def _natasha_entities(text: str) -> list[tuple[int, int, str, str]]:
+    t0 = time.perf_counter()
     try:
         from natasha import Segmenter, NewsEmbedding, NewsNERTagger, Doc
+
+        t_load = time.perf_counter()
         seg = Segmenter()
         emb = NewsEmbedding()
         tagger = NewsNERTagger(emb)
+        _log_timing("_natasha_entities model init", time.perf_counter() - t_load)
+
+        t_doc = time.perf_counter()
         doc = Doc(text)
         doc.segment(seg)
         doc.tag_ner(tagger)
+        _log_timing("_natasha_entities Doc.tag_ner", time.perf_counter() - t_doc,
+                    f"text_len={len(text)}")
+
         label_map = {"PER": "ФИО", "ORG": "ОРГ"}
         result = []
         for span in doc.spans:
@@ -280,25 +298,51 @@ def _natasha_entities(text: str) -> list[tuple[int, int, str, str]]:
             if span.type == "PER" and not _all_words_capitalized(value):
                 continue
             result.append((span.start, span.stop, label_map[span.type], value))
+
+        _log_timing("_natasha_entities TOTAL", time.perf_counter() - t0,
+                    f"spans={len(result)}")
         return result
-    except Exception:
+    except Exception as exc:
+        logger.warning("_natasha_entities: ошибка %s", exc)
         return []
 
 
 def _natasha_entities_per_line(text: str) -> list[tuple[int, int, str, str]]:
+    t0 = time.perf_counter()
     try:
         from natasha import Segmenter, NewsEmbedding, NewsNERTagger, Doc
+
+        t_load = time.perf_counter()
         seg = Segmenter()
         emb = NewsEmbedding()
         tagger = NewsNERTagger(emb)
+        _log_timing("_natasha_entities_per_line model init", time.perf_counter() - t_load)
     except Exception:
         return []
 
     result: list[tuple[int, int, str, str]] = []
     label_map = {"PER": "ФИО", "ORG": "ОРГ"}
 
+    # Считаем строки-кандидаты заранее для оценки масштаба
+    all_lines = text.split("\n")
+    candidate_lines = [
+        (i, raw)
+        for i, raw in enumerate(all_lines)
+        if raw.strip() and re.match(
+            r'^[А-ЯЁ][а-яёА-ЯЁ\-]+(?:\s+[А-ЯЁ][а-яёА-ЯЁ\-]+){1,3}$',
+            raw.strip()
+        )
+    ]
+    logger.warning(
+        "[ENIGMA TIMING] _natasha_entities_per_line: total_lines=%d candidate_lines=%d",
+        len(all_lines), len(candidate_lines),
+    )
+
     line_offset = 0
-    for raw_line in text.split("\n"):
+    processed = 0
+    t_slow_threshold = 0.1  # логируем строки, которые обрабатываются дольше 100мс
+
+    for raw_line in all_lines:
         stripped = raw_line.strip()
         if stripped and re.match(
             r'^[А-ЯЁ][а-яёА-ЯЁ\-]+(?:\s+[А-ЯЁ][а-яёА-ЯЁ\-]+){1,3}$',
@@ -310,11 +354,20 @@ def _natasha_entities_per_line(text: str) -> list[tuple[int, int, str, str]]:
             if any(_is_geo_word(w) for w in stripped.split()):
                 line_offset += len(raw_line) + 1
                 continue
+
             probe = _NER_PREFIX + stripped
+            t_line = time.perf_counter()
             try:
                 doc = Doc(probe)
                 doc.segment(seg)
                 doc.tag_ner(tagger)
+                elapsed_line = time.perf_counter() - t_line
+                processed += 1
+                if elapsed_line > t_slow_threshold:
+                    logger.warning(
+                        "[ENIGMA TIMING] _natasha_per_line slow line #%d '%.40s' %.3fs",
+                        processed, stripped, elapsed_line,
+                    )
                 for span in doc.spans:
                     if span.type not in label_map:
                         continue
@@ -324,15 +377,23 @@ def _natasha_entities_per_line(text: str) -> list[tuple[int, int, str, str]]:
                     orig_end   = line_offset + (span.stop  - _NER_PREFIX_LEN)
                     value = text[orig_start:orig_end]
                     result.append((orig_start, orig_end, label_map[span.type], value))
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "_natasha_entities_per_line: строка '%s' ошибка %s",
+                    stripped[:40], exc,
+                )
 
         line_offset += len(raw_line) + 1
 
+    _log_timing(
+        "_natasha_entities_per_line TOTAL", time.perf_counter() - t0,
+        f"candidate_lines={len(candidate_lines)} processed={processed} spans={len(result)}",
+    )
     return result
 
 
 def _presidio_entities(text: str) -> list[tuple[int, int, str, str]]:
+    t0 = time.perf_counter()
     try:
         from presidio_analyzer.predefined_recognizers import (
             EmailRecognizer, IpRecognizer, PhoneRecognizer,
@@ -341,31 +402,34 @@ def _presidio_entities(text: str) -> list[tuple[int, int, str, str]]:
         recognizers = [EmailRecognizer(), IpRecognizer(), PhoneRecognizer()]
         result = []
         for rec in recognizers:
+            t_rec = time.perf_counter()
             hits = rec.analyze(text=text, entities=rec.supported_entities, nlp_artifacts=None)
+            elapsed_rec = time.perf_counter() - t_rec
+            logger.warning(
+                "[ENIGMA TIMING] presidio %s: %.3fs | hits=%d",
+                type(rec).__name__, elapsed_rec, len(hits),
+            )
             for hit in hits:
                 label = label_map.get(hit.entity_type, hit.entity_type)
                 result.append((hit.start, hit.end, label, text[hit.start:hit.end]))
+        _log_timing("_presidio_entities TOTAL", time.perf_counter() - t0,
+                    f"found={len(result)}")
         return result
-    except Exception:
+    except Exception as exc:
+        logger.warning("_presidio_entities: ошибка %s", exc)
         return []
 
 
 def _postfilter_spans(
     spans: list[tuple[int, int, str, str]],
 ) -> list[tuple[int, int, str, str]]:
-    """Фильтрация ложных срабатываний Natasha.
-
-    Отклоняет:
-    - PER/ФИО — если все токены нарицательные (словарь + pymorphy2)
-    - ORG/ОРГ — если все токены присутствуют в _ORG_COMMON_WORDS
-    """
+    t0 = time.perf_counter()
     try:
         from core.detector_patch import natasha_postfilter
         spans = natasha_postfilter(spans)
     except ImportError:
         pass
 
-    # Дополнительный фильтр для ОРГ: однословные нарицательные
     filtered: list[tuple[int, int, str, str]] = []
     for span in spans:
         label = span[2]
@@ -373,12 +437,13 @@ def _postfilter_spans(
         if label in ("ОРГ", "ORG", "organization"):
             tokens = value.split()
             if all(_is_org_common_word(t) for t in tokens):
-                import logging as _log
-                _log.getLogger(__name__).info(
+                logger.info(
                     "Postfilter: отклонён ORG '%s' — все токены нарицательные", value
                 )
                 continue
         filtered.append(span)
+    _log_timing("_postfilter_spans", time.perf_counter() - t0,
+                f"before={len(spans)} after={len(filtered)}")
     return filtered
 
 
@@ -407,20 +472,60 @@ def detect_entities(
     Ollama/GLiNER are NOT called here — they are triggered manually via the UI
     and merged into the entity list before anonymize() is called.
     """
+    t0 = time.perf_counter()
+    logger.warning(
+        "[ENIGMA TIMING] detect_entities START | text_len=%d chars, lines=%d",
+        len(text), text.count("\n"),
+    )
+
     spans: list[tuple[int, int, str, str]] = []
+
     if use_regex:
         spans += _regex_entities(text)
+        logger.warning(
+            "[ENIGMA TIMING] detect_entities after regex: spans=%d | %.3fs",
+            len(spans), time.perf_counter() - t0,
+        )
+
     if use_natasha:
+        t_natasha = time.perf_counter()
         spans += _natasha_entities(text)
+        logger.warning(
+            "[ENIGMA TIMING] detect_entities after natasha_full: spans=%d | +%.3fs",
+            len(spans), time.perf_counter() - t_natasha,
+        )
+        t_per_line = time.perf_counter()
         spans += _natasha_entities_per_line(text)
+        logger.warning(
+            "[ENIGMA TIMING] detect_entities after natasha_per_line: spans=%d | +%.3fs",
+            len(spans), time.perf_counter() - t_per_line,
+        )
+
     if use_presidio:
+        t_presidio = time.perf_counter()
         spans += _presidio_entities(text)
+        logger.warning(
+            "[ENIGMA TIMING] detect_entities after presidio: spans=%d | +%.3fs",
+            len(spans), time.perf_counter() - t_presidio,
+        )
+
+    t_post = time.perf_counter()
     spans = _expand_org_spans(text, spans)
-    # Постфильтр: удалить нарицательные ФИО/ОРГ до merge, чтобы не занимать span
+    logger.warning(
+        "[ENIGMA TIMING] detect_entities after expand_org: spans=%d | +%.3fs",
+        len(spans), time.perf_counter() - t_post,
+    )
+
     spans = _postfilter_spans(spans)
     spans = _merge_spans(spans)
+
     if labels:
         spans = [s for s in spans if s[2] in labels]
+
+    _log_timing(
+        "detect_entities TOTAL", time.perf_counter() - t0,
+        f"final_spans={len(spans)}",
+    )
     return spans
 
 
@@ -429,15 +534,7 @@ def anonymize(
     enabled_labels: set[str] | None = None,
     predetected_entities: list[tuple[int, int, str, str]] | None = None,
 ) -> tuple[str, dict[str, dict[str, str]]]:
-    """Replace PII entities with placeholders.
-
-    Args:
-        text: original text.
-        enabled_labels: if set, only entities with these labels are masked.
-        predetected_entities: if provided, detection is SKIPPED and this list
-            is used directly. Pass session_state[_ENTITIES] when Ollama was
-            already run manually — avoids redundant re-detection.
-    """
+    """Replace PII entities with placeholders."""
     if predetected_entities is not None:
         spans = list(predetected_entities)
         if enabled_labels:
