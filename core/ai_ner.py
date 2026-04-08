@@ -3,7 +3,7 @@ AI-модуль NER для проекта Enigma.
 
 Поддерживает два бэкенда:
   - gliner  : локальная модель GLiNER (urchade/gliner_multi-v2.1)
-  - ollama  : локальный REST API Ollama (qwen2.5:7b / mistral:7b)
+  - ollama  : локальный REST API Ollama (qwen2.5:3b / mistral:7b)
   - off     : только Natasha + Presidio + regex (без AI)
 
 Режим задаётся через переменную окружения ENIGMA_AI_NER_MODE
@@ -47,7 +47,7 @@ logger = logging.getLogger(__name__)
 _DEFAULT_MODE = os.environ.get("ENIGMA_AI_NER_MODE", "off").lower()
 _GLINER_MODEL = os.environ.get("ENIGMA_GLINER_MODEL", "urchade/gliner_multi-v2.1")
 _OLLAMA_URL   = os.environ.get("ENIGMA_OLLAMA_URL",   "http://localhost:11434")
-_OLLAMA_MODEL = os.environ.get("ENIGMA_OLLAMA_MODEL", "qwen2.5:7b")
+_OLLAMA_MODEL = os.environ.get("ENIGMA_OLLAMA_MODEL", "qwen2.5:3b")
 _KEEP_ALIVE   = "15m"  # держать модель в памяти между запросами
 _TIMEOUT      = 300    # секунд — 5 минут, достаточно для холодного старта модели
 

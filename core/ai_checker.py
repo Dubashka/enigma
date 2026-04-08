@@ -12,7 +12,7 @@ import requests
 logger = logging.getLogger(__name__)
 
 OLLAMA_URL   = os.environ.get("ENIGMA_OLLAMA_URL",   "http://localhost:11434")
-OLLAMA_MODEL = os.environ.get("ENIGMA_OLLAMA_MODEL", "qwen2.5:7b")
+OLLAMA_MODEL = os.environ.get("ENIGMA_OLLAMA_MODEL", "qwen2.5:3b")
 _MAX_RETRIES = 3
 _TIMEOUT     = 180  # секунд — даём время на первый холодный старт модели
 _KEEP_ALIVE  = "15m"  # держать модель в памяти между запросами
