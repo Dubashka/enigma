@@ -33,6 +33,7 @@ import json
 import logging
 import os
 import re
+import time
 from typing import Any
 
 import requests
@@ -71,6 +72,22 @@ def _cache_key(text: str, mode: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Вспомогательные утилиты логирования
+# ---------------------------------------------------------------------------
+
+def _log_timing(stage: str, elapsed: float, extra: str = "") -> None:
+    """Единый формат тайминг-лога: уровень WARNING чтобы было видно без настройки."""
+    msg = f"[ENIGMA TIMING] {stage}: {elapsed:.2f}s"
+    if extra:
+        msg += f" | {extra}"
+    logger.warning(msg)
+
+
+def _text_stats(text: str) -> str:
+    return f"len={len(text)} chars, lines={text.count(chr(10))}"
+
+
+# ---------------------------------------------------------------------------
 # GLiNER-бэкенд
 # ---------------------------------------------------------------------------
 
@@ -78,8 +95,10 @@ def _load_gliner():
     """Ленивая загрузка GLiNER — только при первом использовании."""
     try:
         from gliner import GLiNER  # type: ignore
+        t0 = time.perf_counter()
+        logger.warning("[ENIGMA TIMING] GLiNER: начало загрузки модели '%s'", _GLINER_MODEL)
         model = GLiNER.from_pretrained(_GLINER_MODEL)
-        logger.info("GLiNER model '%s' loaded.", _GLINER_MODEL)
+        _log_timing("GLiNER model load", time.perf_counter() - t0, f"model={_GLINER_MODEL}")
         return model
     except ImportError:
         logger.error("gliner не установлен. pip install gliner")
@@ -94,12 +113,19 @@ _gliner_model_cache: Any = None  # синглтон модели
 
 def _run_gliner(text: str) -> list[dict]:
     global _gliner_model_cache
+
+    logger.warning("[ENIGMA TIMING] GLiNER: старт | %s", _text_stats(text))
+    t_total = time.perf_counter()
+
     if _gliner_model_cache is None:
         _gliner_model_cache = _load_gliner()
 
+    t_infer = time.perf_counter()
     raw = _gliner_model_cache.predict_entities(text, GLINER_LABELS)
-    results: list[dict] = []
+    _log_timing("GLiNER inference", time.perf_counter() - t_infer,
+                f"raw_entities={len(raw)}")
 
+    results: list[dict] = []
     for ent in raw:
         label       = ent.get("label", "")
         score       = float(ent.get("score", 0.0))
@@ -129,6 +155,8 @@ def _run_gliner(text: str) -> list[dict]:
             "source":     "gliner",
         })
 
+    _log_timing("GLiNER total", time.perf_counter() - t_total,
+                f"accepted={len(results)}/{len(raw)}")
     return results
 
 
@@ -268,6 +296,12 @@ def _run_ollama(text: str) -> list[dict]:
         OllamaUnavailableError — сервер недоступен
         OllamaParseError       — невалидный JSON
     """
+    logger.warning(
+        "[ENIGMA TIMING] Ollama (simple): старт | model=%s | %s",
+        _OLLAMA_MODEL, _text_stats(text),
+    )
+    t_total = time.perf_counter()
+
     payload = {
         "model": _OLLAMA_MODEL,
         "messages": [
@@ -277,6 +311,14 @@ def _run_ollama(text: str) -> list[dict]:
         "stream": False,
         "keep_alive": _KEEP_ALIVE,
     }
+
+    prompt_chars = len(_OLLAMA_SYSTEM_PROMPT) + len(text)
+    logger.warning(
+        "[ENIGMA TIMING] Ollama (simple): отправка запроса | prompt_chars=%d",
+        prompt_chars,
+    )
+    t_request = time.perf_counter()
+
     try:
         resp = requests.post(
             f"{_OLLAMA_URL}/api/chat",
@@ -290,6 +332,7 @@ def _run_ollama(text: str) -> list[dict]:
             "Запустите сервер командой: ollama serve"
         )
     except requests.exceptions.Timeout:
+        _log_timing("Ollama (simple) TIMEOUT", time.perf_counter() - t_request)
         raise OllamaTimeoutError(
             f"Ollama не ответила за {_TIMEOUT} секунд.\n"
             f"Возможные причины:\n"
@@ -300,6 +343,12 @@ def _run_ollama(text: str) -> list[dict]:
     except requests.exceptions.HTTPError as exc:
         raise OllamaUnavailableError(f"Ollama вернула HTTP-ошибку: {exc}")
 
+    t_http = time.perf_counter() - t_request
+    resp_chars = len(resp.text)
+    _log_timing("Ollama (simple) HTTP round-trip", t_http,
+                f"resp_chars={resp_chars}")
+
+    t_parse = time.perf_counter()
     try:
         content = resp.json()["message"]["content"]
         json_str = _extract_json_array(content)
@@ -312,6 +361,8 @@ def _run_ollama(text: str) -> list[dict]:
         raise OllamaParseError(
             f"Не удалось разобрать ответ Ollama: {exc}\n\nОтвет:\n{content!r}"
         )
+    _log_timing("Ollama (simple) JSON parse", time.perf_counter() - t_parse,
+                f"raw_entities={len(raw_list)}")
 
     results: list[dict] = []
     for item in raw_list:
@@ -331,6 +382,8 @@ def _run_ollama(text: str) -> list[dict]:
         except (KeyError, TypeError, ValueError) as exc:
             logger.warning("Ollama: пропущена сущность из-за ошибки: %s", exc)
 
+    _log_timing("Ollama (simple) total", time.perf_counter() - t_total,
+                f"accepted={len(results)}")
     return results
 
 
@@ -355,6 +408,14 @@ def _run_ollama_with_base(
         OllamaUnavailableError — сервер недоступен
         OllamaParseError       — невалидный JSON в ответе
     """
+    logger.warning(
+        "[ENIGMA TIMING] Ollama (with_base): старт | model=%s | %s | base_entities=%d",
+        _OLLAMA_MODEL, _text_stats(text), len(base),
+    )
+    t_total = time.perf_counter()
+
+    # --- Шаг 1: сборка промпта ---
+    t_build = time.perf_counter()
     base_description = _build_base_description(base)
     user_message = (
         f"=== БАЗОВЫЙ СПИСОК СУЩНОСТЕЙ (найдено автоматически) ===\n"
@@ -362,6 +423,9 @@ def _run_ollama_with_base(
         f"=== ТЕКСТ ДОКУМЕНТА ===\n"
         f"{text}"
     )
+    prompt_chars = len(_OLLAMA_SYSTEM_PROMPT_WITH_BASE) + len(user_message)
+    _log_timing("Ollama (with_base) prompt build", time.perf_counter() - t_build,
+                f"prompt_chars={prompt_chars}")
 
     payload = {
         "model": _OLLAMA_MODEL,
@@ -372,6 +436,13 @@ def _run_ollama_with_base(
         "stream": False,
         "keep_alive": _KEEP_ALIVE,
     }
+
+    # --- Шаг 2: HTTP-запрос к Ollama ---
+    logger.warning(
+        "[ENIGMA TIMING] Ollama (with_base): отправка запроса | prompt_chars=%d",
+        prompt_chars,
+    )
+    t_request = time.perf_counter()
 
     try:
         resp = requests.post(
@@ -386,6 +457,7 @@ def _run_ollama_with_base(
             "Запустите сервер командой: ollama serve"
         )
     except requests.exceptions.Timeout:
+        _log_timing("Ollama (with_base) TIMEOUT", time.perf_counter() - t_request)
         raise OllamaTimeoutError(
             f"Ollama не ответила за {_TIMEOUT} секунд.\n"
             f"Возможные причины:\n"
@@ -396,6 +468,13 @@ def _run_ollama_with_base(
     except requests.exceptions.HTTPError as exc:
         raise OllamaUnavailableError(f"Ollama вернула HTTP-ошибку: {exc}")
 
+    t_http = time.perf_counter() - t_request
+    resp_chars = len(resp.text)
+    _log_timing("Ollama (with_base) HTTP round-trip", t_http,
+                f"resp_chars={resp_chars}")
+
+    # --- Шаг 3: разбор JSON ---
+    t_parse = time.perf_counter()
     try:
         content = resp.json()["message"]["content"]
         json_str = _extract_json_object(content)
@@ -408,8 +487,10 @@ def _run_ollama_with_base(
         raise OllamaParseError(
             f"Не удалось разобрать ответ Ollama: {exc}\n\nОтвет:\n{content!r}"
         )
+    _log_timing("Ollama (with_base) JSON parse", time.perf_counter() - t_parse)
 
-    # Разбираем false_positives
+    # --- Шаг 4: разбираем false_positives ---
+    t_post = time.perf_counter()
     fp_raw = parsed.get("false_positives", [])
     false_positive_indices: set[int] = set()
     if isinstance(fp_raw, list):
@@ -427,7 +508,7 @@ def _run_ollama_with_base(
             [(v for _, (_, _, _, v) in removed)],
         )
 
-    # Разбираем new
+    # --- Шаг 5: разбираем new ---
     new_raw = parsed.get("new", [])
     new_entities: list[dict] = []
     if isinstance(new_raw, list):
@@ -446,6 +527,12 @@ def _run_ollama_with_base(
                 })
             except (KeyError, TypeError, ValueError) as exc:
                 logger.warning("Ollama: пропущена новая сущность из-за ошибки: %s", exc)
+
+    _log_timing("Ollama (with_base) post-processing", time.perf_counter() - t_post,
+                f"fp={len(false_positive_indices)} new={len(new_entities)}")
+    _log_timing("Ollama (with_base) TOTAL", time.perf_counter() - t_total,
+                f"confirmed={len(parsed.get('confirmed', []))} "
+                f"fp={len(false_positive_indices)} new={len(new_entities)}")
 
     return new_entities, false_positive_indices
 
@@ -476,6 +563,8 @@ def merge_entity_lists(
     Возвращает список кортежей (start, end, label, value) —
     тот же формат, что и detect_entities(), чтобы anonymize() его принял.
     """
+    t0 = time.perf_counter()
+
     # Фильтруем ложноположительные из базового списка
     if exclude_indices:
         filtered_base = [
@@ -513,6 +602,8 @@ def merge_entity_lists(
                             ai_text, b[2], ai_label,
                         )
 
+    _log_timing("merge_entity_lists", time.perf_counter() - t0,
+                f"base={len(base)} ai={len(ai)} result={len(merged)}")
     return merged
 
 
@@ -564,6 +655,13 @@ class AINer:
         Исключения OllamaUnavailableError / OllamaTimeoutError / OllamaParseError
         пробрасываются наверх — обрабатывает вызывающий код (UI).
         """
+        logger.warning(
+            "[ENIGMA TIMING] AINer.extract: mode=%s use_cache=%s | %s | base=%s",
+            self.mode, self.use_cache, _text_stats(text),
+            f"{len(base_entities)} entities" if base_entities is not None else "None",
+        )
+        t0 = time.perf_counter()
+
         if self.mode == "off" or not text.strip():
             if base_entities is not None and self.mode == "ollama":
                 return [], set()
@@ -573,24 +671,27 @@ class AINer:
         if self.mode == "ollama" and base_entities is not None:
             cache_key = _cache_key(text + str([(s, e, l) for s, e, l, _ in base_entities]), self.mode + "_with_base")
             if self.use_cache and cache_key in _cache:
-                logger.debug("AINer: cache hit (mode=%s+base)", self.mode)
+                logger.warning("[ENIGMA TIMING] AINer.extract: CACHE HIT (ollama+base)")
                 cached = _cache[cache_key]
-                # cached хранится как dict с двумя ключами
                 return cached["new"], set(cached["fp"])
 
+            logger.warning("[ENIGMA TIMING] AINer.extract: cache MISS → _run_ollama_with_base")
             new_entities, fp_indices = _run_ollama_with_base(text, base_entities)
 
             if self.use_cache:
                 _cache[cache_key] = {"new": new_entities, "fp": list(fp_indices)}
 
+            _log_timing("AINer.extract (ollama+base) total", time.perf_counter() - t0)
             return new_entities, fp_indices
 
         # Обычный режим (GLiNER или Ollama без base)
         if self.use_cache:
             key = _cache_key(text, self.mode)
             if key in _cache:
-                logger.debug("AINer: cache hit (mode=%s)", self.mode)
+                logger.warning("[ENIGMA TIMING] AINer.extract: CACHE HIT (mode=%s)", self.mode)
                 return _cache[key]
+
+        logger.warning("[ENIGMA TIMING] AINer.extract: cache MISS → _run_%s", self.mode)
 
         if self.mode == "gliner":
             result = _run_gliner(text)
@@ -603,6 +704,8 @@ class AINer:
             key = _cache_key(text, self.mode)
             _cache[key] = result
 
+        _log_timing("AINer.extract total", time.perf_counter() - t0,
+                    f"mode={self.mode} results={len(result)}")
         return result
 
     def is_enabled(self) -> bool:
