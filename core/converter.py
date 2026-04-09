@@ -1,16 +1,20 @@
-"""Конвертация поддерживаемых форматов в Markdown через Docling.
+"""Конвертация любого поддерживаемого формата в plain-text (Markdown).
+
+Является тонкой обёрткой над markitdown и core.ocr.
+Используется в md_masking — до шага detect_entities().
 
 Поддерживаемые форматы:
     .md / .txt  — возвращаются без изменений
-    .pdf        — docling (текстовый PDF и сканы через встроенный OCR)
-    .docx       — docling
-    .doc        — docling
-    .pptx       — docling
-    .odt        — docling
+    .pdf        — markitdown (текстовый PDF) или Tesseract OCR (скан)
+    .docx       — markitdown
+    .doc        — markitdown (требует LibreOffice или fallback к python-docx)
+    .pptx       — markitdown
+    .odt        — markitdown
 
 Возвращаемые значения:
     (text: str, warning: str | None)
-    warning != None означает, что конвертация прошла с оговорками.
+    warning != None означает, что конвертация прошла с оговорками
+    (например, скан распознан через OCR).
     При ошибке бросается RuntimeError с человекочитаемым сообщением.
 """
 from __future__ import annotations
@@ -25,6 +29,9 @@ PASSTHROUGH_TYPES = ["md", "txt"]
 # Все допустимые расширения для file_uploader
 ACCEPTED_TYPES = PASSTHROUGH_TYPES + CONVERTIBLE_TYPES
 
+# Порог: если markitdown вернул меньше символов — считаем скан
+_SCAN_THRESHOLD = 50
+
 
 def file_to_markdown(
     file_bytes: bytes,
@@ -37,9 +44,8 @@ def file_to_markdown(
     Args:
         file_bytes: содержимое файла.
         file_name:  оригинальное имя (используется для определения расширения).
-        ocr_lang:   не используется (оставлен для совместимости API).
-        force_ocr:  не используется (оставлен для совместимости API).
-                    Docling автоматически применяет OCR для сканов.
+        ocr_lang:   язык Tesseract (актуально только для PDF-скан).
+        force_ocr:  принудительно использовать OCR вместо markitdown.
 
     Returns:
         (text, warning) — warning = None если всё хорошо.
@@ -54,22 +60,10 @@ def file_to_markdown(
         text = file_bytes.decode("utf-8", errors="replace")
         return text, None
 
-    if ext not in CONVERTIBLE_TYPES:
-        raise RuntimeError(
-            f"Неподдерживаемый формат файла: .{ext}. "
-            f"Допустимые форматы: {', '.join(ACCEPTED_TYPES)}"
-        )
-
     # --- Требует временного файла ---
     tmp_path = _save_temp(file_bytes, file_name)
     try:
-        text = _docling_to_md(tmp_path)
-        if not text.strip():
-            raise RuntimeError(
-                "Docling не смог извлечь текст из файла. "
-                "Проверьте, что файл не повреждён и не защищён паролем."
-            )
-        return text, None
+        return _convert_from_path(tmp_path, ext, ocr_lang=ocr_lang, force_ocr=force_ocr)
     finally:
         _remove_temp(tmp_path)
 
@@ -98,30 +92,61 @@ def _remove_temp(path: str) -> None:
         pass
 
 
-def _docling_to_md(path: str) -> str:
-    """Конвертировать файл в Markdown через Docling.
+def _convert_from_path(
+    path: str,
+    ext: str,
+    ocr_lang: str,
+    force_ocr: bool,
+) -> tuple[str, str | None]:
+    is_pdf = ext == "pdf"
 
-    Docling автоматически определяет тип контента и применяет
-    встроенный OCR для сканированных PDF.
+    # PDF-скан: OCR по умолчанию (force_ocr) или если markitdown вернул мало текста
+    if is_pdf and force_ocr:
+        return _ocr_to_md(path, ocr_lang)
 
-    Args:
-        path: абсолютный путь к временному файлу.
+    # Все остальные форматы + текстовый PDF — markitdown
+    text, error = _markitdown(path)
+    if error:
+        raise RuntimeError(error)
 
-    Returns:
-        Markdown-текст документа.
+    # Авто-детект скана: мало текста → OCR
+    if is_pdf and len(text.replace(" ", "").replace("\n", "")) < _SCAN_THRESHOLD:
+        warning = (
+            "PDF похож на скан: markitdown не нашёл текст. "
+            "Запускаем Tesseract OCR автоматически."
+        )
+        text, _ = _ocr_to_md(path, ocr_lang)
+        return text, warning
 
-    Raises:
-        RuntimeError: если Docling не установлен или произошла ошибка конвертации.
-    """
+    return text, None
+
+
+def _markitdown(path: str) -> tuple[str, str | None]:
     try:
-        from docling.document_converter import DocumentConverter
-
-        converter = DocumentConverter()
-        result = converter.convert(path)
-        return result.document.export_to_markdown() or ""
-    except ImportError as exc:
-        raise RuntimeError(
-            "Docling не установлен. Выполните: pip install docling"
-        ) from exc
+        from markitdown import MarkItDown
+        result = MarkItDown().convert(path)
+        return (result.text_content or ""), None
+    except ImportError:
+        return "", 'Установите markitdown: pip install "markitdown[pdf]"'
     except Exception as exc:
-        raise RuntimeError(f"Ошибка конвертации через Docling: {exc}") from exc
+        return "", f"Ошибка конвертации: {exc}"
+
+
+def _ocr_to_md(path: str, lang: str) -> tuple[str, str | None]:
+    try:
+        from core.ocr import ocr_pdf
+        from core.output import generate_ocr_md
+        pages = ocr_pdf(path, lang=lang)
+        if not any(p["text"] for p in pages):
+            raise RuntimeError(
+                "OCR не смог распознать текст. "
+                "Проверьте качество скана и наличие языкового пакета Tesseract."
+            )
+        md = generate_ocr_md(pages).decode("utf-8", errors="replace")
+        return md, "Файл распознан через Tesseract OCR."
+    except ImportError as exc:
+        raise RuntimeError(f"OCR недоступен: {exc}") from exc
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError(f"Ошибка OCR: {exc}") from exc
