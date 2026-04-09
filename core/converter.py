@@ -2,11 +2,16 @@
 
 Поддерживаемые форматы:
     .md / .txt  — возвращаются без изменений
-    .pdf        — docling (текстовый PDF и сканы через встроенный OCR)
+    .pdf        — docling + pypdfium2 backend (текстовый PDF и сканы через OCR)
     .docx       — docling
     .doc        — docling
     .pptx       — docling
     .odt        — docling
+
+Почему pypdfium2 backend:
+    Стандартный бэкенд docling_parse написан на C++ и не может работать
+    с путями, содержащими кириллицу или пробелы (например, папка «Энигма»
+    на Windows). pypdfium2 этой проблемы не имеет.
 
 Возвращаемые значения:
     (text: str, warning: str | None)
@@ -60,8 +65,8 @@ def file_to_markdown(
             f"Допустимые форматы: {', '.join(ACCEPTED_TYPES)}"
         )
 
-    # --- Требует временного файла ---
-    tmp_path = _save_temp(file_bytes, file_name)
+    # --- Требует временного файла с безопасным ASCII-именем ---
+    tmp_path = _save_temp(file_bytes, ext)
     try:
         text = _docling_to_md(tmp_path)
         if not text.strip():
@@ -82,10 +87,15 @@ def _get_ext(file_name: str) -> str:
     return file_name.rsplit(".", 1)[-1].lower() if "." in file_name else ""
 
 
-def _save_temp(data: bytes, name: str) -> str:
+def _save_temp(data: bytes, ext: str) -> str:
+    """Сохранить байты во временный файл с безопасным ASCII-именем.
+
+    Кириллица и пробелы в имени файла ломают C++-бэкенд docling_parse
+    на Windows. Поэтому используем нейтральное имя upload.<ext>.
+    """
     upload_dir = os.path.join(tempfile.gettempdir(), "enigma_uploads")
     os.makedirs(upload_dir, exist_ok=True)
-    path = os.path.join(upload_dir, name)
+    path = os.path.join(upload_dir, f"upload.{ext}")
     with open(path, "wb") as f:
         f.write(data)
     return path
@@ -99,10 +109,10 @@ def _remove_temp(path: str) -> None:
 
 
 def _docling_to_md(path: str) -> str:
-    """Конвертировать файл в Markdown через Docling.
+    """Конвертировать файл в Markdown через Docling c pypdfium2 backend.
 
-    Docling автоматически определяет тип контента и применяет
-    встроенный OCR для сканированных PDF.
+    pypdfium2 используется вместо стандартного docling_parse, потому что
+    последний падает с RuntimeError при кириллице в пути к venv на Windows.
 
     Args:
         path: абсолютный путь к временному файлу.
@@ -111,17 +121,30 @@ def _docling_to_md(path: str) -> str:
         Markdown-текст документа.
 
     Raises:
-        RuntimeError: если Docling не установлен или произошла ошибка конвертации.
+        RuntimeError: если зависимости не установлены или произошла ошибка.
     """
     try:
-        from docling.document_converter import DocumentConverter
+        from docling.document_converter import DocumentConverter, PdfFormatOption
+        from docling.datamodel.base_models import InputFormat
+        from docling.datamodel.pipeline_options import PdfPipelineOptions
+        from docling.backend.pypdfium2_backend import PyPdfiumDocumentBackend
 
-        converter = DocumentConverter()
+        pipeline_options = PdfPipelineOptions(do_ocr=True)
+
+        converter = DocumentConverter(
+            format_options={
+                InputFormat.PDF: PdfFormatOption(
+                    pipeline_options=pipeline_options,
+                    backend=PyPdfiumDocumentBackend,
+                )
+            }
+        )
         result = converter.convert(path)
         return result.document.export_to_markdown() or ""
     except ImportError as exc:
         raise RuntimeError(
-            "Docling не установлен. Выполните: pip install docling"
+            f"Не установлена зависимость для конвертации: {exc}. "
+            "Выполните: pip install docling pypdfium2"
         ) from exc
     except Exception as exc:
         raise RuntimeError(f"Ошибка конвертации через Docling: {exc}") from exc
