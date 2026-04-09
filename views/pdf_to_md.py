@@ -1,14 +1,10 @@
-"""File → Markdown / OCR conversion view (3-step flow).
+"""File → Markdown conversion view (3-step flow).
 
-Supported formats: PDF, DOCX, PPTX, XLSX, CSV, JSON.
+Использует Docling для конвертации всех поддерживаемых форматов.
+Docling автоматически определяет тип PDF (текстовый / скан) и применяет
+OCR при необходимости — ручной выбор пути не требуется.
 
-Two conversion paths for PDF:
-- Text-based PDF  → markitdown (fast, preserves structure)
-- Scanned PDF     → Tesseract OCR via core.ocr (pdf2image + pytesseract)
-
-The path is chosen automatically: if markitdown returns < 50 non-whitespace
-chars the file is treated as a scan and the OCR branch is activated.
-The user can also force OCR manually via a checkbox on the convert step.
+Поддерживаемые форматы: PDF, DOCX, PPTX, XLSX, CSV, JSON.
 """
 from __future__ import annotations
 
@@ -24,12 +20,11 @@ _STAGE_UPLOAD  = "upload"
 _STAGE_CONVERT = "convert"
 _STAGE_RESULT  = "result"
 
-_FILE_PATH    = "pdf_md_file_path"
-_FILE_NAME    = "pdf_md_file_name"
-_FILE_SIZE    = "pdf_md_file_size"
-_MD_RESULT    = "pdf_md_result"
-_OCR_PAGES    = "pdf_md_ocr_pages"
-_IS_OCR       = "pdf_md_is_ocr"
+_FILE_PATH   = "pdf_md_file_path"
+_FILE_NAME   = "pdf_md_file_name"
+_FILE_SIZE   = "pdf_md_file_size"
+_MD_RESULT   = "pdf_md_result"
+_CONV_META   = "pdf_md_conv_meta"   # dict с метаданными конвертации
 
 _SUPPORTED_TYPES = ["pdf", "docx", "pptx", "xlsx", "csv", "json"]
 
@@ -40,12 +35,6 @@ _TYPE_LABELS = {
     "xlsx": "Excel таблица",
     "csv":  "CSV файл",
     "json": "JSON файл",
-}
-
-_LANG_OPTIONS = {
-    "Русский + Английский": "rus+eng",
-    "Только русский":       "rus",
-    "Только английский":    "eng",
 }
 
 
@@ -92,8 +81,12 @@ def _render_step_convert() -> None:
     file_size  = st.session_state.get(_FILE_SIZE, 0)
     ext        = file_name.rsplit(".", 1)[-1].lower() if "." in file_name else ""
     type_label = _TYPE_LABELS.get(ext, "Файл")
-    size_str   = f"{file_size / 1_048_576:.2f} MB" if file_size >= 1_048_576 else f"{file_size / 1024:.1f} KB"
-    is_pdf     = ext == "pdf"
+    size_str   = (
+        f"{file_size / 1_048_576:.2f} MB"
+        if file_size >= 1_048_576
+        else f"{file_size / 1024:.1f} KB"
+    )
+    is_pdf = ext == "pdf"
 
     st.subheader("Конвертация")
     st.markdown(
@@ -110,28 +103,23 @@ def _render_step_convert() -> None:
         unsafe_allow_html=True,
     )
 
-    # OCR options — shown only for PDF, enabled by default
+    # Опция форсирования OCR — только для PDF
     force_ocr = False
-    ocr_lang  = "rus+eng"
     if is_pdf:
         force_ocr = st.checkbox(
-            "Сканированный PDF",
-            value=True,
+            "Принудительный OCR (для сканов)",
+            value=False,
             help=(
-                "Включите этот параметр, если ваш PDF является сканом и не содержит выделяемого текста. "
-                "При отключенном параметре будет использоваться быстрое извлечение текста, что не подходит для сканов в PDF."
+                "Docling автоматически определяет тип PDF и применяет OCR при необходимости. "
+                "Включите эту опцию только если автоматическое определение не сработало."
             ),
         )
-        if force_ocr:
-            lang_label = st.selectbox(
-                "Язык распознавания",
-                options=list(_LANG_OPTIONS.keys()),
-                index=0,
-            )
-            ocr_lang = _LANG_OPTIONS[lang_label]
+        if not force_ocr:
             st.info(
-                "⏰ Обработка может занять несколько минут."
+                "ℹ️ Docling автоматически определит тип PDF и применит OCR для сканов."
             )
+        else:
+            st.info("⏰ Принудительный OCR может занять несколько минут.")
 
     col_back, col_convert = st.columns([1, 1])
     with col_back:
@@ -141,71 +129,52 @@ def _render_step_convert() -> None:
     with col_convert:
         if st.button("Конвертировать", type="primary", use_container_width=True):
             file_path = st.session_state[_FILE_PATH]
-            if is_pdf and force_ocr:
-                with st.spinner("Распознаём текст через Tesseract…"):
-                    pages, error = _run_ocr(file_path, lang=ocr_lang)
-                if error:
-                    st.error(error)
-                else:
-                    st.session_state[_OCR_PAGES] = pages
-                    st.session_state[_IS_OCR]    = True
-                    st.session_state[_STAGE]     = _STAGE_RESULT
-                    st.rerun()
+            with st.spinner("Конвертируем через Docling…"):
+                md_text, meta, error = _convert_docling(
+                    file_path,
+                    force_full_ocr=force_ocr,
+                )
+            if error:
+                st.error(error)
             else:
-                with st.spinner("Конвертируем…"):
-                    md_text, error = _convert_markitdown(file_path)
-                if error:
-                    st.error(error)
-                elif _is_scanned(md_text):
-                    st.warning(
-                        "⚠️ Не удалось извлечь текст из PDF. "
-                        "Похоже, это сканированный документ. "
-                        "Включите параметр **\"Сканированный PDF\"** и попробуйте снова."
-                    )
-                else:
-                    st.session_state[_MD_RESULT] = md_text
-                    st.session_state[_IS_OCR]    = False
-                    st.session_state[_STAGE]     = _STAGE_RESULT
-                    st.rerun()
+                st.session_state[_MD_RESULT] = md_text
+                st.session_state[_CONV_META] = meta
+                st.session_state[_STAGE]     = _STAGE_RESULT
+                st.rerun()
 
 
 def _render_step_result() -> None:
     render_steps(current=3, steps=STEPS_PDF_MD)
-    is_ocr    = st.session_state.get(_IS_OCR, False)
     file_name = st.session_state.get(_FILE_NAME, "файл")
     base      = file_name.rsplit(".", 1)[0] if "." in file_name else file_name
+    md_text   = st.session_state.get(_MD_RESULT, "")
+    meta      = st.session_state.get(_CONV_META, {})
 
     st.subheader("Результат конвертации")
 
-    if is_ocr:
-        _render_ocr_result(base)
-    else:
-        _render_md_result(base)
-
-    col_back, col_reset = st.columns([1, 1])
-    with col_back:
-        if st.button("Назад к конвертации", use_container_width=True):
-            st.session_state.pop(_MD_RESULT, None)
-            st.session_state.pop(_OCR_PAGES, None)
-            st.session_state.pop(_IS_OCR, None)
-            st.session_state[_STAGE] = _STAGE_CONVERT
-            st.rerun()
-    with col_reset:
-        if st.button("Сбросить", use_container_width=True):
-            _cleanup()
-            st.rerun()
-
-
-def _render_md_result(base: str) -> None:
-    md_text = st.session_state[_MD_RESULT]
-
+    # Метрики
     col1, col2, col3 = st.columns(3)
     col1.metric("Строк",    f"{len(md_text.splitlines()):,}")
     col2.metric("Символов", f"{len(md_text):,}")
     col3.metric("Слов",     f"{len(md_text.split()):,}")
 
+    # Инфо о методе конвертации
+    if meta.get("ocr_applied"):
+        st.success("✅ Применён OCR (Docling автоматически определил скан)")
+    elif meta.get("force_ocr"):
+        st.success("✅ Применён принудительный OCR")
+    else:
+        st.success("✅ Текст извлечён напрямую (текстовый документ)")
+
+    if meta.get("pages"):
+        st.caption(f"Страниц обработано: {meta['pages']}")
+
+    # Превью
     st.markdown("**Превью (первые 1000 символов)**")
-    st.code(md_text[:1000] + ("…" if len(md_text) > 1000 else ""), language="markdown")
+    st.code(
+        md_text[:1000] + ("…" if len(md_text) > 1000 else ""),
+        language="markdown",
+    )
 
     st.download_button(
         label="Скачать .md файл",
@@ -216,46 +185,73 @@ def _render_md_result(base: str) -> None:
         type="primary",
     )
 
+    col_back, col_reset = st.columns([1, 1])
+    with col_back:
+        if st.button("Назад к конвертации", use_container_width=True):
+            st.session_state.pop(_MD_RESULT, None)
+            st.session_state.pop(_CONV_META, None)
+            st.session_state[_STAGE] = _STAGE_CONVERT
+            st.rerun()
+    with col_reset:
+        if st.button("Сбросить", use_container_width=True):
+            _cleanup()
+            st.rerun()
 
-def _render_ocr_result(base: str) -> None:
-    from core.output import generate_ocr_md, generate_ocr_txt
 
-    pages = st.session_state[_OCR_PAGES]
-    total_chars = sum(len(p["text"]) for p in pages)
-    total_words = sum(len(p["text"].split()) for p in pages)
+# ---------------------------------------------------------------------------
+# Docling конвертер
+# ---------------------------------------------------------------------------
 
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Страниц",  str(len(pages)))
-    col2.metric("Символов", f"{total_chars:,}")
-    col3.metric("Слов",     f"{total_words:,}")
+def _convert_docling(
+    file_path: str,
+    force_full_ocr: bool = False,
+) -> tuple[str, dict, str | None]:
+    """Конвертировать файл в Markdown через Docling.
 
-    st.markdown("**Превью — страница 1**")
-    preview = pages[0]["text"] if pages else ""
-    st.code(
-        preview[:1000] + ("…" if len(preview) > 1000 else ""),
-        language="",
-    )
+    Returns:
+        (md_text, meta, error)
+        meta содержит: ocr_applied, force_ocr, pages
+    """
+    try:
+        from docling.document_converter import DocumentConverter, PdfFormatOption
+        from docling.datamodel.base_models import InputFormat
+        from docling.datamodel.pipeline_options import PdfPipelineOptions
+    except ImportError:
+        return "", {}, 'Установите Docling: pip install "docling>=2.0.0"'
 
-    st.markdown("Скачать результат")
-    dl1, dl2 = st.columns(2)
-    with dl1:
-        st.download_button(
-            label="Скачать .md",
-            data=generate_ocr_md(pages),
-            file_name=f"{base}_ocr.md",
-            mime="text/markdown",
-            use_container_width=True,
-            type="primary",
+    try:
+        pipeline_options = PdfPipelineOptions()
+        pipeline_options.do_ocr = True          # Docling решает когда применять OCR
+        pipeline_options.do_table_structure = True
+
+        if force_full_ocr:
+            # Форсируем OCR на каждой странице
+            pipeline_options.ocr_options.force_full_page_ocr = True
+
+        converter = DocumentConverter(
+            format_options={
+                InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+            }
         )
-    with dl2:
-        st.download_button(
-            label="Скачать .txt",
-            data=generate_ocr_txt(pages),
-            file_name=f"{base}_ocr.txt",
-            mime="text/plain",
-            use_container_width=True,
-            type="primary",
-        )
+
+        result = converter.convert(file_path)
+        doc    = result.document
+        md_text = doc.export_to_markdown()
+
+        if not md_text or not md_text.strip():
+            return "", {}, "Не удалось извлечь текст из документа."
+
+        # Собираем метаданные
+        meta: dict = {
+            "ocr_applied": getattr(result, "ocr_applied", False),
+            "force_ocr":   force_full_ocr,
+            "pages":       getattr(doc, "num_pages", None),
+        }
+
+        return md_text, meta, None
+
+    except Exception as exc:
+        return "", {}, f"Ошибка Docling: {exc}"
 
 
 # ---------------------------------------------------------------------------
@@ -273,44 +269,6 @@ def _file_emoji(ext: str) -> str:
     }.get(ext, "📄")
 
 
-def _is_scanned(text: str) -> bool:
-    from core.ocr import is_scanned_pdf
-    return is_scanned_pdf(text)
-
-
-def _convert_markitdown(file_path: str) -> tuple[str, str | None]:
-    try:
-        from markitdown import MarkItDown
-        md = MarkItDown()
-        result = md.convert(file_path)
-        text = result.text_content
-        if text is None:
-            text = ""
-        return text, None
-    except ImportError:
-        return "", 'pip install "markitdown[pdf]"'
-    except Exception as e:
-        return "", f"Ошибка при конвертации: {e}"
-
-
-def _run_ocr(file_path: str, lang: str = "rus+eng") -> tuple[list[dict], str | None]:
-    try:
-        from core.ocr import ocr_pdf
-        pages = ocr_pdf(file_path, lang=lang)
-        if not any(p["text"] for p in pages):
-            return pages, (
-                "OCR не смог распознать текст. "
-                "Проверьте качество скана и наличие нужного языкового пакета Tesseract."
-            )
-        return pages, None
-    except ImportError as e:
-        return [], str(e)
-    except RuntimeError as e:
-        return [], str(e)
-    except Exception as e:
-        return [], f"Ошибка OCR: {e}"
-
-
 def _cleanup() -> None:
     file_path = st.session_state.get(_FILE_PATH)
     if file_path and os.path.exists(file_path):
@@ -318,5 +276,5 @@ def _cleanup() -> None:
             os.remove(file_path)
         except OSError:
             pass
-    for key in [_FILE_PATH, _FILE_NAME, _FILE_SIZE, _MD_RESULT, _OCR_PAGES, _IS_OCR, _STAGE]:
+    for key in [_FILE_PATH, _FILE_NAME, _FILE_SIZE, _MD_RESULT, _CONV_META, _STAGE]:
         st.session_state.pop(key, None)
