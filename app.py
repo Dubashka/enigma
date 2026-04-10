@@ -1,8 +1,16 @@
 import pathlib
+
+# Load .env before anything else so env vars (ENIGMA_AI_NER_MODE etc.) are available
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # python-dotenv not installed — env vars must be set manually
+
 import streamlit as st
 
 st.set_page_config(
-    page_title="Enigma — Шифрование данных для LLM",
+    page_title="Reksoft Consulting. Шифрование данных для LLM",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -13,20 +21,27 @@ if _logo.exists():
 else:
     st.sidebar.title("Enigma")
 
+st.sidebar.markdown("** **")
 page = st.sidebar.radio(
     "Режим",
-    ["Маскирование", "Демаскирование", "Конвертация в MD", "Помощь"],
+    ["Маскирование Excel/CSV", "Демаскирование Excel/CSV", "Конвертация в MD", "Маскирование текстовых файлов", "Демаскирование текстовых файлов", "Помощь"],
     label_visibility="collapsed",
 )
 
-if page == "Маскирование":
+if page == "Маскирование Excel/CSV":
     from views.masking import render
     render()
-elif page == "Демаскирование":
+elif page == "Демаскирование Excel/CSV":
     from views.decryption import render
     render()
 elif page == "Конвертация в MD":
     from views.pdf_to_md import render
+    render()
+elif page == "Маскирование текстовых файлов":
+    from views.md_masking import render
+    render()
+elif page == "Демаскирование текстовых файлов":
+    from views.md_decryption import render
     render()
 elif page == "Помощь":
     from views.help import render

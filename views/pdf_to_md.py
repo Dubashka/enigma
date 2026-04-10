@@ -65,7 +65,7 @@ def _render_step_upload() -> None:
     st.subheader("Загрузите файл")
 
     uploaded = st.file_uploader(
-        "Форматы: " + ", ".join(f".{t}" for t in _SUPPORTED_TYPES) + ". Макс. размер: 300 MB.",
+        " ",
         type=_SUPPORTED_TYPES,
         key="pdf_md_uploader",
     )
@@ -119,7 +119,7 @@ def _render_step_convert() -> None:
             value=True,
             help=(
                 "Включите этот параметр, если ваш PDF является сканом и не содержит выделяемого текста. "
-                "При отключенном параметре будет использоваться быстрое извлечение текста без OCR — подходит только для текстовых PDF."
+                "При отключенном параметре будет использоваться быстрое извлечение текста, что не подходит для сканов в PDF."
             ),
         )
         if force_ocr:
@@ -130,7 +130,7 @@ def _render_step_convert() -> None:
             )
             ocr_lang = _LANG_OPTIONS[lang_label]
             st.info(
-                "⏰ OCR обрабатывает каждую страницу отдельно — для многостраничных документов ожидайте несколько минут."
+                "⏰ Обработка может занять несколько минут."
             )
 
     col_back, col_convert = st.columns([1, 1])

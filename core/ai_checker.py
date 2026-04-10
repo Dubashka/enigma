@@ -1,14 +1,25 @@
-"""LM Studio integration for AI-based column sensitivity analysis."""
+"""Ollama integration for AI-based column sensitivity analysis."""
 from __future__ import annotations
 
 import json
+import logging
+import os
 import re
 
 import pandas as pd
 import requests
 
-LM_STUDIO_URL = "http://127.0.0.1:1234/v1/chat/completions"
+logger = logging.getLogger(__name__)
+
+OLLAMA_URL   = os.environ.get("ENIGMA_OLLAMA_URL",   "http://localhost:11434")
+OLLAMA_MODEL = os.environ.get("ENIGMA_OLLAMA_MODEL", "qwen2.5:3b")
 _MAX_RETRIES = 3
+_TIMEOUT     = 180  # секунд — даём время на первый холодный старт модели
+_KEEP_ALIVE  = "15m"  # держать модель в памяти между запросами
+
+
+class OllamaUnavailableError(RuntimeError):
+    """Пробрасывается в UI, если Ollama недоступна или не отвечает."""
 
 
 def _build_column_samples(sheets: dict[str, pd.DataFrame], max_rows: int = 3) -> str:
@@ -31,7 +42,7 @@ def _extract_json(text: str) -> str:
     if match:
         return match.group(1).strip()
 
-    # Find outermost {...} in the full text (works even inside <think> blocks)
+    # Find outermost {...} in the full text
     start = text.find("{")
     if start != -1:
         depth = 0
@@ -46,14 +57,57 @@ def _extract_json(text: str) -> str:
     return ""
 
 
+def _call_ollama(messages: list[dict], max_tokens: int = 800) -> str:
+    """Send a chat request to Ollama and return the response content string.
+
+    Raises:
+        OllamaUnavailableError — connection error or timeout
+        requests.HTTPError    — non-2xx HTTP response
+    """
+    payload = {
+        "model": OLLAMA_MODEL,
+        "messages": messages,
+        "stream": False,
+        "keep_alive": _KEEP_ALIVE,
+        "options": {
+            "temperature": 0,
+            "num_predict": max_tokens,
+        },
+    }
+    try:
+        resp = requests.post(
+            f"{OLLAMA_URL}/api/chat",
+            json=payload,
+            timeout=_TIMEOUT,
+        )
+        resp.raise_for_status()
+    except requests.exceptions.ConnectionError:
+        raise OllamaUnavailableError(
+            f"Ollama недоступна по адресу {OLLAMA_URL}.\n"
+            "Запустите: ollama serve"
+        )
+    except requests.exceptions.Timeout:
+        raise OllamaUnavailableError(
+            f"Ollama не ответила за {_TIMEOUT} секунд "
+            f"(модель {OLLAMA_MODEL} может ещё загружаться).\n"
+            "Подождите и попробуйте снова."
+        )
+
+    return resp.json()["message"]["content"]
+
+
 def check_columns_with_ai(
     sheets: dict[str, pd.DataFrame],
     presidio_required: dict[str, list[str]] | None = None,
 ) -> dict[str, dict[str, str]]:
-    """Call LM Studio to classify columns for privacy sensitivity.
+    """Call Ollama to classify columns for privacy sensitivity.
 
     Returns:
         {sheet_name: {col_name: "required" | "recommended" | "safe"}}
+
+    Raises:
+        OllamaUnavailableError — if Ollama is not running
+        RuntimeError           — if the model fails to return valid JSON
     """
     columns_info = {name: list(df.columns) for name, df in sheets.items()}
     all_current_cols = {c for cols in columns_info.values() for c in cols}
@@ -65,11 +119,14 @@ def check_columns_with_ai(
         cached = lib.get_all_classifications()
         known_columns = lib.get_known_columns()
         relevant_known = [c for c in known_columns if c in all_current_cols]
-        print(f"[AI] Библиотека: {len(cached)} классификаций. Колонки в файле: {list(all_current_cols)}")
-        print(f"[AI] Найдено в кэше: {[c for c in all_current_cols if c in cached]}")
-        print(f"[AI] Не найдено в кэше: {[c for c in all_current_cols if c not in cached]}")
+        logger.info("[AI] Библиотека: %d классификаций. Колонки в файле: %s",
+                    len(cached), list(all_current_cols))
+        logger.info("[AI] Найдено в кэше: %s",
+                    [c for c in all_current_cols if c in cached])
+        logger.info("[AI] Не найдено в кэше: %s",
+                    [c for c in all_current_cols if c not in cached])
     except Exception as e:
-        print(f"[AI] Ошибка чтения библиотеки: {e}")
+        logger.warning("[AI] Ошибка чтения библиотеки: %s", e)
         cached = {}
         relevant_known = []
 
@@ -85,10 +142,10 @@ def check_columns_with_ai(
             else:
                 unknown_cols[sheet_name].append(col)
 
-    # If all columns are known — return immediately without calling LM Studio
+    # If all columns are known — return immediately without calling Ollama
     total_unknown = sum(len(v) for v in unknown_cols.values())
     if total_unknown == 0:
-        print("[AI] Все колонки найдены в библиотеке — LM Studio не вызывается")
+        logger.info("[AI] Все колонки найдены в библиотеке — Ollama не вызывается")
         return prefilled
 
     # Build samples only for unknown columns
@@ -125,45 +182,26 @@ def check_columns_with_ai(
         f"JSON format: {json.dumps({k: {c: 'required|recommended|safe' for c in v} for k, v in unknown_info.items()}, ensure_ascii=False)}"
     )
 
-    payload = {
-        "model": "local-model",
-        "messages": [
-            {
-                "role": "system",
-                "content": "You are a JSON-only API. Reply with valid JSON only. No thinking tags, no explanation, no markdown.",
-            },
-            {"role": "user", "content": "/no_think\n\n" + prompt},
-            # Prefill assistant response with "{" — forces model to continue as JSON
-            {"role": "assistant", "content": "{"},
-        ],
-        "temperature": 0,
-        "seed": 42,
-        "max_tokens": 800,
-        "chat_template_kwargs": {"enable_thinking": False},
-    }
+    messages = [
+        {
+            "role": "system",
+            "content": "You are a JSON-only API. Reply with valid JSON only. No explanation, no markdown.",
+        },
+        {"role": "user", "content": prompt},
+    ]
 
     last_error: Exception | None = None
     for attempt in range(1, _MAX_RETRIES + 1):
-        print(f"[AI] Попытка {attempt}/{_MAX_RETRIES}…")
-        response = requests.post(LM_STUDIO_URL, json=payload, timeout=None)
-        response.raise_for_status()
-
-        message = response.json()["choices"][0]["message"]
-        # Collect all text the model produced (content + reasoning_content for qwen3)
-        full_text = " ".join(
-            (message.get(field) or "")
-            for field in ("content", "reasoning_content")
-        ).strip()
-        # Restore prefill "{" — model continues from it without repeating
-        if full_text and not full_text.lstrip().startswith("{"):
-            full_text = "{" + full_text
-        print(f"[AI] Попытка {attempt}, ответ: {full_text[:200]}")
+        logger.info("[AI] Попытка %d/%d…", attempt, _MAX_RETRIES)
+        # OllamaUnavailableError propagates immediately — no retry on connection errors
+        full_text = _call_ollama(messages, max_tokens=800)
+        logger.info("[AI] Попытка %d, ответ: %s", attempt, full_text[:200])
 
         candidate = _extract_json(full_text)
         if candidate:
             try:
                 raw: dict = json.loads(candidate)
-                # Merge: prefilled (from library) + new from LM Studio
+                # Merge: prefilled (from library) + new from Ollama
                 result: dict[str, dict[str, str]] = {}
                 for sheet_name, df in sheets.items():
                     sheet_raw = raw.get(sheet_name, {})
@@ -174,14 +212,14 @@ def check_columns_with_ai(
                         else:
                             verdict = sheet_raw.get(col, "safe")
                             result[sheet_name][col] = verdict
-                print(f"[AI] Успешно на попытке {attempt}")
+                logger.info("[AI] Успешно на попытке %d", attempt)
                 return result
             except json.JSONDecodeError as exc:
                 last_error = exc
-                print(f"[AI] Попытка {attempt}: JSON невалидный — {exc}")
+                logger.warning("[AI] Попытка %d: JSON невалидный — %s", attempt, exc)
         else:
             last_error = ValueError("JSON не найден в ответе модели")
-            print(f"[AI] Попытка {attempt}: пустой ответ")
+            logger.warning("[AI] Попытка %d: пустой ответ", attempt)
 
     raise RuntimeError(
         f"Модель не вернула валидный JSON после {_MAX_RETRIES} попыток. "
@@ -190,10 +228,10 @@ def check_columns_with_ai(
 
 
 def get_fake_prefix_from_ai(col_name: str, samples: list[str]) -> str | None:
-    """Ask LM Studio for a single neutral Russian noun to use as a fake value prefix.
+    """Ask Ollama for a single neutral Russian noun to use as a fake value prefix.
 
     Example: col_name="Отдел", samples=["Бухгалтерия", "ИТ-поддержка"] → "Подразделение"
-    Returns None if LM Studio is unavailable or response is unusable.
+    Returns None if Ollama is unavailable or response is unusable.
     """
     samples_str = ", ".join(f'"{s}"' for s in samples[:3])
     prompt = (
@@ -202,24 +240,15 @@ def get_fake_prefix_from_ai(col_name: str, samples: list[str]) -> str | None:
         "которое подойдёт как анонимный заменитель для значений этого типа. "
         "Только слово, без объяснений."
     )
-    payload = {
-        "model": "local-model",
-        "messages": [
-            {
-                "role": "system",
-                "content": "Ты помощник по анонимизации данных. Отвечай одним словом.",
-            },
-            {"role": "user", "content": "/no_think\n\n" + prompt},
-        ],
-        "temperature": 0,
-        "seed": 42,
-        "max_tokens": 10,
-        "chat_template_kwargs": {"enable_thinking": False},
-    }
+    messages = [
+        {
+            "role": "system",
+            "content": "Ты помощник по анонимизации данных. Отвечай одним словом.",
+        },
+        {"role": "user", "content": prompt},
+    ]
     try:
-        response = requests.post(LM_STUDIO_URL, json=payload, timeout=10)
-        response.raise_for_status()
-        text = response.json()["choices"][0]["message"].get("content", "").strip()
+        text = _call_ollama(messages, max_tokens=10).strip()
         # Take only the first word, strip punctuation
         word = re.split(r"[\s\n.,!?;:\-–—]", text)[0].strip()
         if word and len(word) >= 2:

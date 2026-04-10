@@ -9,7 +9,7 @@ from core.state_keys import (
     DL_XLSX, DL_MAP_JSON, DL_MAP_XLSX, FORMAT_MODE,
     AI_RESULTS,
 )
-from core.ai_checker import check_columns_with_ai
+from core.ai_checker import check_columns_with_ai, OllamaUnavailableError
 from core.parser import save_upload, parse_preview, parse_full, cleanup_upload
 from core.detector import detect_sensitive_columns, classify_column_type
 from core.masker import mask_sheets
@@ -18,7 +18,6 @@ from ui.step_indicator import render_steps
 from ui.column_selector import render_column_selector
 
 import pandas as pd
-import requests
 
 
 def _build_zip(xlsx_bytes: bytes, json_bytes: bytes, base_name: str) -> bytes:
@@ -54,7 +53,7 @@ def _render_step_upload() -> None:
     st.subheader("Загрузите файл для маскирования")
 
     uploaded_file = st.file_uploader(
-        "Форматы: Excel (.xlsx) или CSV (.csv). Максимальный размер: 200 MB.",
+        " ",
         type=["xlsx", "csv"],
         key="file_uploader_mask",
     )
@@ -96,12 +95,15 @@ def _render_step_preview() -> None:
             with st.status("Анализируем столбцы с помощью AI…", expanded=True) as status:
                 st.write("🔍 Сканируем данные на наличие email, телефонов, IP…")
                 _, presidio_required = detect_sensitive_columns(sheets)
-                st.write("📤 Отправляем данные в LM Studio…")
+                st.write("📤 Отправляем данные в Ollama…")
                 try:
                     result = check_columns_with_ai(sheets, presidio_required=presidio_required)
-                except requests.exceptions.ConnectionError:
+                except OllamaUnavailableError as exc:
                     status.update(label="Ошибка подключения", state="error")
-                    st.error("Не удалось подключиться к LM Studio. Убедитесь, что он запущен на http://127.0.0.1:1234")
+                    st.error(
+                        f"Не удалось подключиться к Ollama.\n\n{exc}\n\n"
+                        "Убедитесь, что Ollama запущена: `ollama serve`"
+                    )
                     st.stop()
                 except Exception as exc:
                     status.update(label="Ошибка", state="error")
@@ -124,13 +126,11 @@ def _render_step_columns() -> None:
     sheets = st.session_state[SHEETS]
     ai_results = st.session_state.get(AI_RESULTS)
 
-    # Show AI results summary (collapsed by default)
     if ai_results is not None:
         _render_ai_summary(ai_results)
 
     st.info("При необходимости отредактируйте выбор колонок вручную.")
 
-    # Recompute detection — fast and stateless
     detected, presidio_required = detect_sensitive_columns(sheets)
 
     render_column_selector(sheets, detected, ai_results=ai_results, presidio_required=presidio_required)
@@ -157,7 +157,7 @@ def _render_step_columns() -> None:
                             and col_type == "numeric"
                         ):
                             user_choice = st.session_state.get(
-                                f"type_{sheet_name}_{col}", "коэффициент"
+                                f"type_{sheet_name}_{col}", "идентификатор"
                             )
                             if user_choice == "идентификатор":
                                 sheet_config[col] = "text"
@@ -170,7 +170,6 @@ def _render_step_columns() -> None:
             if not any_selected:
                 st.warning("Выберите хотя бы одну колонку для маскирования")
             else:
-                # Save verdicts to library based on user's actual selection
                 ai_results = st.session_state.get(AI_RESULTS, {})
                 try:
                     from core.library import AttributeLibrary
@@ -180,11 +179,9 @@ def _render_step_columns() -> None:
                         selected_cols = set(mask_config.get(sheet_name, {}).keys())
                         for col in df.columns:
                             if col in selected_cols:
-                                # User chose to mask: keep AI verdict, but at least "required"
                                 ai_verdict = sheet_ai.get(col, "required")
                                 verdict = ai_verdict if ai_verdict in ("required", "recommended") else "required"
                             else:
-                                # User chose not to mask
                                 verdict = "safe"
                             lib.save_classification(col, verdict)
                 except Exception:
@@ -225,7 +222,6 @@ def _render_step_columns() -> None:
 
 
 def _render_ai_summary(ai_results: dict[str, dict[str, str]]) -> None:
-    """Render a summary panel showing AI column classification counts."""
     required_cols: list[str] = []
     recommended_cols: list[str] = []
     safe_cols: list[str] = []
@@ -269,7 +265,6 @@ def _apply_ai_to_checkboxes(
     sheets: dict,
     ai_results: dict[str, dict[str, str]],
 ) -> None:
-    """Pre-set checkbox session-state keys based on AI verdicts."""
     for sheet_name, df in sheets.items():
         sheet_ai = ai_results.get(sheet_name, {})
         for col in df.columns:
@@ -295,8 +290,9 @@ def _render_step_masked() -> None:
     render_preview(masked_sheets)
 
     base_name = file_name.rsplit(".", 1)[0] if "." in file_name else file_name
-
     st.markdown("Скачать результат")
+    st.warning("⚠️ Не забудьте скачать маппинг (.json) для дальнейшей дешифровки")
+
     col1, col2 = st.columns(2)
 
     with col1:
@@ -336,7 +332,6 @@ def _render_step_masked() -> None:
         file_name=f"{base_name}_mapping.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True,
-        type="primary",
     )
 
     col_back, col_reset = st.columns([1, 1])
